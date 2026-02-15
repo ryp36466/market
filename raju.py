@@ -111,22 +111,24 @@ with st.spinner('Fetching market data...'):
         use_container_width=True
     )
 
-    # Charts Section
+  # Charts Section
     st.subheader('📉 Intraday Charts')
-    selected = st.multiselect('Select indices to chart', df['Index'].tolist(), default=['S&P 500 (SPY)', 'Nasdaq 100 (QQQ)'])
+    selected = st.multiselect('Select indices to chart', TICKERS.keys(), default=['S&P 500 Index ($SPX)', 'Nasdaq 100 (QQQ)'])
 
     for label in selected:
         ticker = TICKERS[label]
-        # Fetch intraday data for charts
+        # Fetch intraday data
+        # '1d' period with '5m' or '15m' interval is best for intraday
         data = yf.Ticker(ticker).history(period='1d', interval='5m')
         
         if not data.empty:
+            # Convert time to Eastern for easier reading
+            data.index = data.index.tz_convert('US/Eastern')
+            
             st.write(f"**{label}**")
-            st.line_chart(data['Close'])
+            # Using area_chart for a more professional "TradingView" look
+            st.area_chart(data['Close'], color="#00ff00" if df.loc[df["Index"] == label, "% Change"].values[0] > 0 else "#ff0000")
         else:
-            st.write(f"**{label}** — no intraday data available")
-
-    st.caption('Tip: refresh the page or press the Streamlit refresh button to update. The app caches data briefly to reduce API calls.')
-
+            st.info(f"💡 {label}: No intraday data available right now (Market might be closed).")
 # Auto-refresh
 count = st_autorefresh(interval=refresh * 1000, key="datarefresh")
