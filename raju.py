@@ -111,23 +111,21 @@ with st.spinner('Fetching market data...'):
         use_container_width=True
     )
 
-  # Charts Section
+ # Charts Section
     st.subheader('📉 Intraday Charts')
     selected = st.multiselect('Select indices to chart', TICKERS.keys(), default=['S&P 500 Index ($SPX)', 'Nasdaq 100 (QQQ)'])
 
     for label in selected:
         ticker = TICKERS[label]
-        # Fetch intraday data
-        # '1d' period with '5m' or '15m' interval is best for intraday
+        # Fetch 5-minute intraday data for the last day
         data = yf.Ticker(ticker).history(period='1d', interval='5m')
         
         if not data.empty:
-            # Convert time to Eastern for easier reading
-            data.index = data.index.tz_convert('US/Eastern')
-            
             st.write(f"**{label}**")
-            # Using area_chart for a more professional "TradingView" look
-            st.area_chart(data['Close'], color="#00ff00" if df.loc[df["Index"] == label, "% Change"].values[0] > 0 else "#ff0000")
+            
+            # This is the key: we plot the 'Close' column
+            # Streamlit line_charts automatically scale to the data range
+            st.line_chart(data['Close'], use_container_width=True)
         else:
             st.info(f"💡 {label}: No intraday data available right now (Market might be closed).")
 # Auto-refresh
