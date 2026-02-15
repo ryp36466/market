@@ -2,5 +2,7 @@ streamlit
 pandas
 numpy
 yfinance
+gcsfs
+fsspec
 newsapi-python
 streamlit-autorefresh
