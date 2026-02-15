@@ -83,6 +83,32 @@ st.sidebar.markdown('**Controls**')
 refresh = st.sidebar.number_input('Auto refresh interval (seconds)', min_value=15, max_value=600, value=60, step=15)
 st.sidebar.write('Choose indices to chart and set refresh interval.')
 
+# Add this helper function near your other functions
+def add_signal(row):
+    if row['% Change'] > 0:
+        return f"🟢 {row['Index']}"
+    elif row['% Change'] < 0:
+        return f"🔴 {row['Index']}"
+    return f"⚪ {row['Index']}"
+
+# Update the display part of your code (around line 95)
+with st.spinner('Fetching market data...'):
+    df = get_data()
+    
+    # Create a display version of the dataframe with signals
+    display_df = df.copy()
+    display_df['Index'] = display_df.apply(add_signal, axis=1)
+    
+    st.subheader('📈 Market Overview')
+    st.dataframe(
+        display_df.style.format({"Last Price": "{:.2f}", "% Change": "{:+.2f}%"})
+        .map(color_pct, subset=["% Change"]),
+        height=350,
+        use_container_width=True,
+        hide_index=True # This makes it look cleaner
+    )
+
+
 # Main App Logic
 with st.spinner('Fetching market data...'):
     df = get_data()
