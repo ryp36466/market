@@ -5,7 +5,7 @@ import numpy as np
 from streamlit_autorefresh import st_autorefresh
 import datetime
 import pytz
-
+from finvizfinance.news import News
 # Page configuration
 st.set_page_config(page_title="Pro Market Terminal", page_icon="🏛️", layout="wide")
 
@@ -154,9 +154,30 @@ def color_rel(val):
     if val < 0.5: return 'background-color: #ffb6c1'
     return ''
     
+@st.cache_data(ttl=600)
+def fetch_finviz_news():
+    try:
+        fnews = News()
+        # This gets the latest general market news from Finviz
+        df_news = fnews.get_news()['news']
+        return df_news.head(10) # Return top 10 headlines
+    except:
+        return pd.DataFrame()
 
+# --- Finviz News Section in Sidebar ---
+st.sidebar.divider()
+st.sidebar.subheader("🗞️ Market Intelligence")
 
+news_data = fetch_finviz_news()
 
+if not news_data.empty:
+    for _, row in news_data.iterrows():
+        # Using an expander to keep the sidebar clean
+        with st.sidebar.expander(f"{row['Source']} | {row['Date']}"):
+            st.write(row['Title'])
+            st.markdown(f"[Read Article]({row['URL']})")
+else:
+    st.sidebar.info("News feed temporarily unavailable.")
 
 # --- APP LOGIC ---
 est = pytz.timezone('US/Eastern')
