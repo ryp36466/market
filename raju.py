@@ -29,18 +29,21 @@ def get_data():
     for label, ticker in TICKERS.items():
         try:
             t = yf.Ticker(ticker)
-            # Get Intraday data for the latest price
+            # Get 7 days of daily data to ensure we have a 'Previous Close'
+            hist_daily = t.history(period="7d", interval="1d")
+            # Get intraday data
             hist_intraday = t.history(period="1d", interval="5m")
-            # Get Daily data for the previous close
-            hist_daily = t.history(period="5d", interval="1d")
             
             if not hist_intraday.empty and len(hist_daily) >= 2:
                 last = hist_intraday["Close"].iloc[-1]
-                prev = hist_daily["Close"].iloc[-2] # Previous market close
+                prev = hist_daily["Close"].iloc[-2]
                 pct = (last - prev) / prev * 100
                 rows.append([label, last, pct])
             else:
-                rows.append([label, np.nan, np.nan])
+                # FALLBACK: If history is empty, try to get the live price directly
+                last = t.fast_info.last_price
+                # If we can't get percent change, we set it to 0.0 so the app doesn't crash
+                rows.append([label, last, 0.0])
         except Exception:
             rows.append([label, np.nan, np.nan])
             
@@ -49,26 +52,22 @@ def get_data():
 def market_score(df):
     score = 0
     try:
-        # Get values safely using the exact labels in TICKERS
-        nasdaq = df.loc[df["Index"] == "Nasdaq 100 (QQQ)", "% Change"].values[0]
-        spx = df.loc[df["Index"] == "S&P 500 (SPY)", "% Change"].values[0]
-        vix = df.loc[df["Index"] == "VIX", "% Change"].values[0]
-        dxy = df.loc[df["Index"] == "DXY", "% Change"].values[0]
-        y10 = df.loc[df["Index"] == "10Y Yield (^TNX)", "% Change"].values[0]
+        # We use a helper to find the % change for a specific index name safely
+        def get_pct(name):
+            val = df.loc[df["Index"] == name, "% Change"].values
+            return val[0] if len(val) > 0 else np.nan
 
-        # Stocks UP = Risk On (+1)
+        nasdaq = get_pct("Nasdaq 100 (QQQ)")
+        spx = get_pct("S&P 500 (SPY)")
+        vix = get_pct("VIX")
+        dxy = get_pct("DXY")
+        y10 = get_pct("10Y Yield (^TNX)")
+
         if not np.isnan(nasdaq) and nasdaq > 0: score += 1
         if not np.isnan(spx) and spx > 0: score += 1
-        
-        # VIX DOWN = Risk On (+1)
         if not np.isnan(vix) and vix < 0: score += 1
-        
-        # DXY DOWN = Risk On (+1)
         if not np.isnan(dxy) and dxy < 0: score += 1
-        
-        # Yields DOWN = Risk On (+1)
         if not np.isnan(y10) and y10 < 0: score += 1
-            
     except Exception:
         pass
     return score
