@@ -113,3 +113,10 @@ for label in selected:
         st.write(f"**{label}** — no intraday data available")
 
 st.caption('Tip: refresh the page or press the Streamlit refresh button to update. The app caches data briefly to reduce API calls.')
+
+# Auto-refresh every X seconds
+from streamlit_autorefresh import st_autorefresh
+
+# Refresh every 60 seconds (you can change this)
+st_autorefresh(interval=60 * 1000, key="market_refresh")
+
