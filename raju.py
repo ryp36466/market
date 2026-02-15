@@ -7,57 +7,40 @@ import datetime
 import pytz
 
 # Page configuration
-st.set_page_config(page_title="Pro Market Terminal", page_icon="🏛️", layout="wide")
+st.set_page_config(page_title="Pro Terminal | Live Impact", page_icon="⚡", layout="wide")
+
+# --- SECTOR IMPACT MAPPING ---
+# This maps sectors to the "Impact Stocks" that move them
+IMPACT_MAP = {
+    "XLK": ["AAPL", "MSFT", "NVDA"],
+    "XLF": ["JPM", "BAC", "GS"],
+    "XLE": ["XOM", "CVX"],
+    "XLV": ["LLY", "UNH", "JNJ"],
+    "XLY": ["AMZN", "TSLA"],
+    "IBIT": ["BTC-USD", "COIN", "MARA"],
+    "SMH": ["NVDA", "TSM", "AMD"]
+}
 
 # --- TICKER CONFIGURATIONS ---
-GLOBAL_TICKERS = {
-    "S&P 500 Futures (ES)": "ES=F",
-    "Nasdaq 100 Futures (NQ)": "NQ=F",
-    "Dow Jones Futures (YM)": "YM=F",
-    "VIX": "^VIX",
-    "10Y Yield (^TNX)": "^TNX",
-    "DXY (US Dollar)": "DX-Y.NYB"
-}
-
+GLOBAL_TICKERS = {"S&P 500": "ES=F", "Nasdaq": "NQ=F", "VIX": "^VIX", "10Y Yield": "^TNX"}
 SECTOR_TICKERS = {
-    "Technology (XLK)": "XLK",
-    "Financials (XLF)": "XLF",
-    "Energy (XLE)": "XLE",
-    "Healthcare (XLV)": "XLV",
-    "Consumer Disc (XLY)": "XLY",
-    "Industrials (XLI)": "XLI",
-    "Utilities (XLU)": "XLU",
-    "Real Estate (XLRE)": "XLRE",
-    "Consumer Staples (XLP)": "XLP",
-    "Materials (XLB)": "XLB"
+    "Technology (XLK)": "XLK", "Financials (XLF)": "XLF", "Energy (XLE)": "XLE",
+    "Healthcare (XLV)": "XLV", "Consumer Disc (XLY)": "XLY", "Semis (SMH)": "SMH"
 }
-
-ETF_TICKERS = {
-    "Bitcoin (IBIT)": "IBIT",
-    "Gold (GLD)": "GLD",
-    "Silver (SLV)": "SLV",
-    "Bonds 20Y+ (TLT)": "TLT",
-    "Semis (SMH)": "SMH",
-    "Ark Innovation (ARKK)": "ARKK"
-}
+ETF_TICKERS = {"Bitcoin (IBIT)": "IBIT", "Gold (GLD)": "GLD", "Bonds (TLT)": "TLT"}
 
 ALL_TICKERS = {**GLOBAL_TICKERS, **SECTOR_TICKERS, **ETF_TICKERS}
 
-# --- ANALYTICS FUNCTIONS ---
+# --- ANALYTICS ---
 def analyze_sentiment(text):
-    """Simple keyword-based sentiment analyzer for headlines"""
-    if not text or not isinstance(text, str):
-        return "⚖️ Neutral"
-        
-    bullish_words = ['surge', 'up', 'rise', 'gain', 'jump', 'rally', 'growth', 'bull', 'high', 'positive', 'win', 'beat', 'boost']
-    bearish_words = ['fall', 'down', 'drop', 'slump', 'plunge', 'bear', 'low', 'negative', 'loss', 'crash', 'dip', 'cut', 'sink']
-    
+    if not text or not isinstance(text, str): return "⚖️ Neutral"
     text = text.lower()
-    bull_score = sum(1 for word in bullish_words if word in text)
-    bear_score = sum(1 for word in bearish_words if word in text)
-    
-    if bull_score > bear_score: return "🐂 Bullish"
-    if bear_score > bull_score: return "🐻 Bearish"
+    bullish = ['surge', 'rally', 'beat', 'growth', 'buy', 'upgrade', 'high', 'jump']
+    bearish = ['plunge', 'drop', 'miss', 'cut', 'fall', 'sell', 'downgrade', 'sink']
+    b_score = sum(1 for w in bullish if w in text)
+    s_score = sum(1 for w in bearish if w in text)
+    if b_score > s_score: return "🐂 Bullish"
+    if s_score > b_score: return "🐻 Bearish"
     return "⚖️ Neutral"
 
 @st.cache_data(ttl=30)
@@ -66,137 +49,69 @@ def fetch_market_data(ticker_dict):
     for label, ticker in ticker_dict.items():
         try:
             t = yf.Ticker(ticker)
-            hist_daily = t.history(period="5d", interval="1d")
-            hist_int = t.history(period="1d", interval="5m")
-            
-            if not hist_int.empty:
-                last = hist_int["Close"].iloc[-1]
-                prev = hist_daily["Close"].iloc[-2] if len(hist_daily) > 1 else last
+            h = t.history(period="1d", interval="5m")
+            if not h.empty:
+                last = h["Close"].iloc[-1]
+                prev = t.history(period="2d")["Close"].iloc[-2]
                 pct = (last - prev) / prev * 100
                 rows.append({"Asset": label, "Symbol": ticker, "Price": last, "Change %": pct})
-            else:
-                rows.append({"Asset": label, "Symbol": ticker, "Price": t.fast_info.last_price, "Change %": 0.0})
-        except:
-            rows.append({"Asset": label, "Symbol": ticker, "Price": np.nan, "Change %": np.nan})
+        except: continue
     return pd.DataFrame(rows)
 
 @st.cache_data(ttl=300)
-def get_ticker_news(ticker_symbol):
+def get_impact_news(ticker_symbol):
     try:
-        return yf.Ticker(ticker_symbol).news[:3]
-    except:
-        return []
+        # Get primary ticker news
+        news = yf.Ticker(ticker_symbol).news[:5]
+        # Also check impact stocks if this is a sector
+        if ticker_symbol in IMPACT_MAP:
+            for stock in IMPACT_MAP[ticker_symbol]:
+                news += yf.Ticker(stock).news[:2]
+        return news
+    except: return []
 
-def color_pct(val):
-    if pd.isna(val): return ''
-    return 'color: #00ff00' if val > 0 else 'color: #ff4b4b' if val < 0 else ''
+# --- APP LAYOUT ---
+st.sidebar.title("⚡ Impact Terminal")
+st_autorefresh(interval=30000, key="datarefresh")
 
-# --- APP LOGIC ---
-est = pytz.timezone('US/Eastern')
-time_now = datetime.datetime.now(est).strftime('%H:%M:%S')
-
-# Fetch data
 global_df = fetch_market_data(GLOBAL_TICKERS)
 sector_df = fetch_market_data(SECTOR_TICKERS)
 etf_df = fetch_market_data(ETF_TICKERS)
 
-full_market = pd.concat([global_df, sector_df, etf_df]).dropna(subset=['Change %'])
-top_gainers = full_market.sort_values('Change %', ascending=False).head(3)
+full_market = pd.concat([global_df, sector_df, etf_df]).dropna()
+top_3 = full_market.sort_values('Change %', ascending=False).head(3)
 
-# --- SIDEBAR (Settings & News) ---
-st.sidebar.title("🏛️ Market Settings")
-refresh = st.sidebar.number_input('Refresh rate (sec)', 15, 600, 30)
-st_autorefresh(interval=refresh * 1000, key="datarefresh")
-
-st.sidebar.divider()
-st.sidebar.subheader("📰 Leader News & Sentiment")
-
-for _, row in top_gainers.iterrows():
-    with st.sidebar.expander(f"{row['Asset']} ({row['Change %']:+.2f}%)"):
-        news_items = get_ticker_news(row['Symbol'])
-        if news_items:
-            for item in news_items:
-                # SAFE EXTRACTION
-                title = item.get('title', 'No Title Available')
-                link = item.get('link', '#')
-                publisher = item.get('publisher', 'Unknown Source')
-                
+# LIVE IMPACT SIDEBAR
+st.sidebar.subheader("🎯 Stock-Level Impact")
+for _, row in top_3.iterrows():
+    with st.sidebar.expander(f"NEWS: {row['Asset']}", expanded=True):
+        articles = get_impact_news(row['Symbol'])
+        if articles:
+            for art in articles:
+                title = art.get('title', 'N/A')
                 sentiment = analyze_sentiment(title)
-                st.markdown(f"**{sentiment}**")
-                st.markdown(f"[{title}]({link})")
-                st.caption(f"Source: {publisher}")
+                # Check if specific stock impact is mentioned
+                impact_badge = "⚠️ IMPACT" if any(s in title.upper() for s in IMPACT_MAP.get(row['Symbol'], [])) else ""
+                
+                st.markdown(f"**{sentiment}** {impact_badge}")
+                st.markdown(f"[{title}]({art.get('link','#')})")
+                st.caption(f"Source: {art.get('publisher','Unknown')}")
                 st.divider()
-        else:
-            st.write("No recent headlines found.")
 
-# --- MAIN CONTENT ---
-st.title("🏛️ Pro Market Terminal")
-st.caption(f"Status: Live | EST Time: {time_now} | Auto-Refresh: {refresh}s")
-
-# SCANNER SECTION
-st.subheader("🔍 Market Scanner")
-col_g, col_l, col_b = st.columns([2, 2, 1])
-
-top_losers = full_market.sort_values('Change %', ascending=True).head(3)
-
-with col_g:
-    st.write("**Top 3 Leaders 🚀**")
-    for _, row in top_gainers.iterrows():
-        st.write(f"🟢 {row['Asset']}: `{row['Change %']:+.2f}%`")
-
-with col_l:
-    st.write("**Top 3 Laggards 📉**")
-    for _, row in top_losers.iterrows():
-        st.write(f"🔴 {row['Asset']}: `{row['Change %']:+.2f}%`")
-
-with col_b:
-    st.write("**Breadth**")
-    up_count = len(full_market[full_market['Change %'] > 0])
-    down_count = len(full_market[full_market['Change %'] < 0])
-    st.metric("Up vs Down", f"{up_count} / {down_count}", delta=f"{up_count-down_count}")
-
-st.divider()
+# MAIN DASHBOARD
+st.title("🏛️ Market Impact Terminal")
+col1, col2, col3 = st.columns(3)
+with col1: st.metric("Top Mover", top_3.iloc[0]['Asset'], f"{top_3.iloc[0]['Change %']:.2f}%")
+with col2: st.metric("Breadth", f"{len(full_market[full_market['Change %']>0])} UP", f"{len(full_market[full_market['Change %']<0])} DOWN")
+with col3: 
+    vix = full_market[full_market['Symbol']=='^VIX']['Price'].values[0]
+    st.metric("VIX (Fear)", f"{vix:.2f}", f"{full_market[full_market['Symbol']=='^VIX']['Change %'].values[0]:.2f}%", delta_color="inverse")
 
 # TABS
-tab1, tab2, tab3 = st.tabs(["🌎 Global Indices", "Sector & ETFs", "📊 Relative Strength & Charts"])
-
-with tab1:
-    st.subheader("Major Markets")
-    st.dataframe(
-        global_df.drop(columns=['Symbol']).style.format({"Price": "{:.2f}", "Change %": "{:+.2f}%"}).map(color_pct, subset=["Change %"]),
-        use_container_width=True, hide_index=True
-    )
-
-with tab2:
-    c1, c2 = st.columns(2)
-    with c1:
-        st.subheader("Sectors (SPDR)")
-        st.dataframe(
-            sector_df.drop(columns=['Symbol']).style.format({"Price": "{:.2f}", "Change %": "{:+.2f}%"}).map(color_pct, subset=["Change %"]),
-            use_container_width=True, hide_index=True
-        )
-    with c2:
-        st.subheader("Key ETFs")
-        st.dataframe(
-            etf_df.drop(columns=['Symbol']).style.format({"Price": "{:.2f}", "Change %": "{:+.2f}%"}).map(color_pct, subset=["Change %"]),
-            use_container_width=True, hide_index=True
-        )
-
-with tab3:
-    st.subheader("Relative Strength (vs. S&P 500)")
-    spy_change = global_df[global_df['Asset'] == "S&P 500 Futures (ES)"]['Change %'].values[0]
-    sector_df['RS'] = sector_df['Change %'] - spy_change
-    rs_sorted = sector_df.sort_values('RS', ascending=True)
-    
-    st.bar_chart(data=rs_sorted, x="Asset", y="RS", color="RS", use_container_width=True)
-    
-    st.divider()
-    st.subheader("Intraday Charts (EST)")
-    selected = st.multiselect('Select Asset to View', list(ALL_TICKERS.keys()), default=["S&P 500 Futures (ES)"])
-    for label in selected:
-        ticker = ALL_TICKERS[label]
-        data = yf.Ticker(ticker).history(period='1d', interval='5m')
-        if not data.empty:
-            data.index = data.index.tz_convert('US/Eastern')
-            st.write(f"**{label}**")
-            st.line_chart(data['Close'], use_container_width=True)
+t1, t2, t3 = st.tabs(["🌎 Markets", "📊 RS Analysis", "📈 Charts"])
+with t1:
+    st.dataframe(full_market[['Asset', 'Price', 'Change %']].style.format({'Price': '{:.2f}', 'Change %': '{:+.2f}%'}), use_container_width=True)
+with t2:
+    spy_pct = full_market[full_market['Asset']=="S&P 500"]['Change %'].values[0]
+    sector_df['RS'] = sector_df['Change %'] - spy_pct
+    st.bar_chart(sector_df.sort_values('RS'), x="Asset", y="RS", color="RS")
