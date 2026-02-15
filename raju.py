@@ -289,7 +289,7 @@ with col_l:
 
 with col_b:
     st.write("**Breadth**")
-    up_count = len(full-market[full_market['Change %'] > 0])
+    up_count = len(full_market[full_market['Change %'] > 0])
     down_count = len(full_market[full_market['Change %'] < 0])
     st.metric("Up / Down", f"{up_count} / {down_count}", delta=f"{up_count - down_count}")
 
