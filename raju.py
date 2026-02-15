@@ -67,7 +67,7 @@ def analyze_sentiment(text):
     if not text or not isinstance(text, str):
         return "⚖️ Neutral"
     bullish_words = ['surge', 'up', 'rise', 'gain', 'jump', 'rally', 'growth', 'bull', 'high', 'positive', 'win', 'beat', 'boost', 'strong', 'outperform', 'soar', 'raises']
-    bearish_words = ['fall', 'down', 'drop', 'slump', 'plunge', 'bear', 'low', 'negative', 'loss', 'crash', 'dip', 'cut', 'sink', 'weak, 'miss', 'lowers', 'decline']
+    bearish_words = ['fall', 'down', 'drop', 'slump', 'plunge', 'bear', 'low', 'negative', 'loss', 'crash', 'dip', 'cut', 'sink', 'weak', 'miss', 'lowers', 'decline']
     text = text.lower()
     bull_score = sum(1 for word in bullish_words if word in text)
     bear_score = sum(1 for word in bearish_words if word in text)
@@ -173,7 +173,7 @@ etf_df = etf_df.sort_values('Change %', ascending=False)
 twentyfour_df = twentyfour_df.sort_values('Change %', ascending=False)
 mag7_df = mag7_df.sort_values('Change %', ascending=False)
 
-# Benchmark for RS (fixed typo here)
+# Benchmark for RS
 benchmark = "SPY (S&P 500 ETF)"
 benchmark_change = 0.0
 if benchmark in full_market['Asset'].values:
@@ -289,7 +289,7 @@ with col_l:
 
 with col_b:
     st.write("**Breadth**")
-    up_count = len(full_market[full_market['Change %'] > 0])
+    up_count = len(full-market[full_market['Change %'] > 0])
     down_count = len(full_market[full_market['Change %'] < 0])
     st.metric("Up / Down", f"{up_count} / {down_count}", delta=f"{up_count - down_count}")
 
