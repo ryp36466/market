@@ -81,14 +81,12 @@ def fetch_all_market_data():
     for ticker in tickers_list:
         label = ticker_to_label.get(ticker, ticker)
         try:
-            # Previous close (from daily)
             prev_close = np.nan
             if 'Close' in daily_data and ticker in daily_data['Close']:
                 close_series = daily_data['Close'][ticker].dropna()
                 if len(close_series) >= 2:
                     prev_close = close_series.iloc[-2]
 
-            # Current price (prefer intraday)
             current_price = np.nan
             if 'Close' in intra_data and ticker in intra_data['Close']:
                 intra_close = intra_data['Close'][ticker].dropna()
@@ -98,12 +96,10 @@ def fetch_all_market_data():
                 if 'Close' in daily_data and ticker in daily_data['Close']:
                     current_price = daily_data['Close'][ticker].iloc[-1]
 
-            # % Change
             pct_change = np.nan
             if not np.isnan(current_price) and not np.isnan(prev_close) and prev_close > 0:
                 pct_change = (current_price - prev_close) / prev_close * 100
 
-            # Relative Volume (today's cum vol / avg of previous 20 days)
             day_vol = 0
             if 'Volume' in intra_data and ticker in intra_data['Volume']:
                 day_vol = intra_data['Volume'][ticker].sum()
@@ -163,13 +159,12 @@ sector_df = full_market[full_market['Asset'].isin(SECTOR_TICKERS.keys())].copy()
 etf_df = full_market[full_market['Asset'].isin(ETF_TICKERS.keys())].copy()
 mag7_df = full_market[full_market['Asset'].isin(MAG7_TICKERS.keys())].copy()
 
-# Sort all groups
 global_df = global_df.sort_values('Change %', ascending=False)
 sector_df = sector_df.sort_values('Change %', ascending=False)
 etf_df = etf_df.sort_values('Change %', ascending=False)
 mag7_df = mag7_df.sort_values('Change %', ascending=False)
 
-# Benchmark for RS (prefer SPY, fallback to ES)
+# Benchmark for RS
 benchmark = "SPY (S&P 500 ETF)"
 benchmark_change = 0
 if benchmark in full_market['Asset'].values:
@@ -186,29 +181,77 @@ mag7_df['RS'] = mag7_df['Change %'] - benchmark_change
 top_gainers = full_market.sort_values('Change %', ascending=False).head(6)
 top_losers = full_market.sort_values('Change %', ascending=True).head(6)
 
+# --- MOVER SENTIMENT & NEWS (pre-fetch for speed) ---
+mover_sentiments = {}
+mover_news_dict = {}
+
+top_movers = pd.concat([top_gainers, top_losers]).drop_duplicates(subset='Asset')
+
+for _, row in top_movers.iterrows():
+    news_items = get_ticker_news(row['Symbol'])
+    mover_news_dict[row['Asset']] = news_items
+    
+    if not news_items:
+        overall = "❓ No News"
+    else:
+        sentiments = [analyze_sentiment(item.get('title', '')) for item in news_items]
+        bull_count = sum(1 for s in sentiments if "🐂" in s)
+        bear_count = sum(1 for s in sentiments if "🐻" in s)
+        if bull_count > bear_count:
+            overall = "🐂 Bullish"
+        elif bear_count > bull_count:
+            overall = "🐻 Bearish"
+        else:
+            overall = "⚖️ Neutral"
+    mover_sentiments[row['Asset']] = overall
+
 # --- SIDEBAR ---
 st.sidebar.title("🏛️ Market Settings")
 refresh = st.sidebar.number_input('Refresh rate (sec)', 15, 600, 30)
 st_autorefresh(interval=refresh * 1000, key="datarefresh")
 
 st.sidebar.divider()
-st.sidebar.subheader("📰 Leader News & Sentiment")
+st.sidebar.subheader("📰 Mover News & Sentiment")
+
+# Leaders
+st.sidebar.markdown("**Leaders 🚀**")
 for _, row in top_gainers.iterrows():
-    vol_note = " 🔥" if row['Rel Vol'] > 1.5 else ""
-    with st.sidebar.expander(f"{row['Asset']} ({row['Change %']:+.2f}%) {vol_note}"):
-        news_items = get_ticker_news(row['Symbol'])
+    overall = mover_sentiments.get(row['Asset'], "⚖️ Neutral")
+    vol_note = " 🔥" if row.get('Rel Vol', 0) > 1.5 else ""
+    news_items = mover_news_dict.get(row['Asset'], [])
+    with st.sidebar.expander(f"{row['Asset']} ({row['Change %']:+.2f}%) {overall}{vol_note}"):
         if news_items:
+            st.markdown(f"**Overall Sentiment: {overall}** (from {len(news_items)} headlines)")
             for item in news_items:
                 title = item.get('title', 'No Title')
                 link = item.get('link', '#')
                 publisher = item.get('publisher', 'Unknown')
                 sentiment = analyze_sentiment(title)
-                st.markdown(f"**{sentiment}**")
-                st.markdown(f"[{title}]({link})")
+                st.markdown(f"**{sentiment}** [{title}]({link})")
                 st.caption(f"Source: {publisher}")
                 st.divider()
         else:
-            st.write("No recent headlines.")
+            st.write("No recent headlines found.")
+
+# Laggards
+st.sidebar.markdown("**Laggards 📉**")
+for _, row in top_losers.iterrows():
+    overall = mover_sentiments.get(row['Asset'], "⚖️ Neutral")
+    vol_note = " 🔥" if row.get('Rel Vol', 0) > 1.5 else ""
+    news_items = mover_news_dict.get(row['Asset'], [])
+    with st.sidebar.expander(f"{row['Asset']} ({row['Change %']:+.2f}%) {overall}{vol_note}"):
+        if news_items:
+            st.markdown(f"**Overall Sentiment: {overall}** (from {len(news_items)} headlines)")
+            for item in news_items:
+                title = item.get('title', 'No Title')
+                link = item.get('link', '#')
+                publisher = item.get('publisher', 'Unknown')
+                sentiment = analyze_sentiment(title)
+                st.markdown(f"**{sentiment}** [{title}]({link})")
+                st.caption(f"Source: {publisher}")
+                st.divider()
+        else:
+            st.write("No recent headlines found.")
 
 # --- MAIN ---
 st.title("🏛️ Pro Market Terminal")
@@ -221,13 +264,16 @@ col_g, col_l, col_b = st.columns([2, 2, 1])
 with col_g:
     st.write("**Top 6 Leaders 🚀**")
     for _, row in top_gainers.iterrows():
-        vol_note = " 🔥" if row['Rel Vol'] > 1.5 else ""
-        st.write(f"🟢 {row['Asset']}: `{row['Change %']:+.2f}%`{vol_note}")
+        overall = mover_sentiments.get(row['Asset'], "⚖️ Neutral")
+        vol_note = " 🔥" if row.get('Rel Vol', 0) > 1.5 else ""
+        st.write(f"🟢 {row['Asset']}: `{row['Change %']:+.2f}%` {overall}{vol_note}")
 
 with col_l:
     st.write("**Top 6 Laggards 📉**")
     for _, row in top_losers.iterrows():
-        st.write(f"🔴 {row['Asset']}: `{row['Change %']:+.2f}%`")
+        overall = mover_sentiments.get(row['Asset'], "⚖️ Neutral")
+        vol_note = " 🔥" if row.get('Rel Vol', 0) > 1.5 else ""
+        st.write(f"🔴 {row['Asset']}: `{row['Change %']:+.2f}%` {overall}{vol_note}")
 
 with col_b:
     st.write("**Breadth**")
@@ -237,7 +283,7 @@ with col_b:
 
 st.divider()
 
-# Tabs
+# Tabs (unchanged from previous version)
 tab1, tab2, tab3 = st.tabs(["🌎 Global Indices", "📈 Sectors, ETFs & Mag7", "📊 Relative Strength & Charts"])
 
 with tab1:
@@ -281,13 +327,10 @@ with tab2:
 
 with tab3:
     st.subheader(f"Relative Strength (vs. {benchmark})")
-
-    # Sectors RS
     rs_sector = sector_df.sort_values('RS', ascending=False)
     st.write("**Sectors**")
     st.bar_chart(rs_sector, y="Asset", x="RS", color="RS", use_container_width=True)
 
-    # Mag7 RS
     rs_mag = mag7_df.sort_values('RS', ascending=False)
     st.write("**Magnificent 7**")
     st.bar_chart(rs_mag, y="Asset", x="RS", color="RS", use_container_width=True)
