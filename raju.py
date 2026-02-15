@@ -46,6 +46,9 @@ ALL_TICKERS = {**GLOBAL_TICKERS, **SECTOR_TICKERS, **ETF_TICKERS}
 # --- ANALYTICS FUNCTIONS ---
 def analyze_sentiment(text):
     """Simple keyword-based sentiment analyzer for headlines"""
+    if not text or not isinstance(text, str):
+        return "⚖️ Neutral"
+        
     bullish_words = ['surge', 'up', 'rise', 'gain', 'jump', 'rally', 'growth', 'bull', 'high', 'positive', 'win', 'beat', 'boost']
     bearish_words = ['fall', 'down', 'drop', 'slump', 'plunge', 'bear', 'low', 'negative', 'loss', 'crash', 'dip', 'cut', 'sink']
     
@@ -113,10 +116,15 @@ for _, row in top_gainers.iterrows():
         news_items = get_ticker_news(row['Symbol'])
         if news_items:
             for item in news_items:
-                sentiment = analyze_sentiment(item['title'])
+                # SAFE EXTRACTION
+                title = item.get('title', 'No Title Available')
+                link = item.get('link', '#')
+                publisher = item.get('publisher', 'Unknown Source')
+                
+                sentiment = analyze_sentiment(title)
                 st.markdown(f"**{sentiment}**")
-                st.markdown(f"[{item['title']}]({item['link']})")
-                st.caption(f"Source: {item['publisher']}")
+                st.markdown(f"[{title}]({link})")
+                st.caption(f"Source: {publisher}")
                 st.divider()
         else:
             st.write("No recent headlines found.")
