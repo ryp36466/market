@@ -61,7 +61,7 @@ MAG7_TICKERS = {
 }
 
 ALL_TICKERS = {**GLOBAL_TICKERS, **SECTOR_TICKERS, **ETF_TICKERS, **TWENTYFOUR_TICKERS, **MAG7_TICKERS}
-from news_scrapper import get_market_news
+
 # --- SENTIMENT ---
 def analyze_sentiment(text):
     if not text or not isinstance(text, str):
@@ -154,42 +154,10 @@ def color_rel(val):
     if val < 0.5: return 'background-color: #ffb6c1'
     return ''
     
-def format_headline(title):
-    """Adds sentiment emojis to headlines based on keywords"""
-    title_low = title.lower()
-    bullish = ['up', 'rise', 'gain', 'surge', 'rally', 'bull', 'buy', 'beat', 'jump', 'high']
-    bearish = ['down', 'fall', 'drop', 'plunge', 'bear', 'sell', 'miss', 'sink', 'low']
-    
-    if any(word in title_low for word in bullish):
-        return f"🟢 {title}"
-    elif any(word in title_low for word in bearish):
-        return f"🔴 {title}"
-    return f"⚖️ {title}"
 
-@st.cache_data(ttl=600)
-def fetch_terminal_news():
-    """Calls your scrapper for a subset of major tickers"""
-    # Using Global and Mag7 tickers to keep the sidebar relevant and fast
-    target_symbols = list(GLOBAL_TICKERS.values()) + list(MAG7_TICKERS.values())
-    try:
-        return get_market_news(target_symbols)
-    except:
-        return pd.DataFrame()
 
-# Execute the fetch
-news_df = fetch_terminal_news()
 
-st.sidebar.divider()
-st.sidebar.subheader("🎯 Live Intelligence")
 
-if not news_df.empty:
-    for _, row in news_df.iterrows():
-        # Uses the format_headline function for the expander title
-        with st.sidebar.expander(format_headline(row['Title'])):
-            st.caption(f"Source: {row['Publisher']} | Ticker: {row['Ticker']}")
-            st.markdown(f"[Read Full Story]({row['Link']})")
-else:
-    st.sidebar.write("No recent headlines found.")
 # --- APP LOGIC ---
 est = pytz.timezone('US/Eastern')
 time_now = datetime.datetime.now(est).strftime('%H:%M:%S')
