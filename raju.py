@@ -35,12 +35,19 @@ SECTOR_TICKERS = {
 }
 
 ETF_TICKERS = {
-    "Bitcoin (IBIT)": "IBIT",
-    "Gold (GLD)": "GLD",
+    "Bitcoin ETF (IBIT)": "IBIT",
+    "Gold ETF (GLD)": "GLD",
     "Silver (SLV)": "SLV",
     "Bonds 20Y+ (TLT)": "TLT",
     "Semis (SMH)": "SMH",
     "Ark Innovation (ARKK)": "ARKK"
+}
+
+TWENTYFOUR_TICKERS = {
+    "Bitcoin 24h (BTC-USD)": "BTC-USD",
+    "Ethereum (ETH-USD)": "ETH-USD",
+    "Gold Futures (GC)": "GC=F",
+    "Crude Oil (CL)": "CL=F"
 }
 
 MAG7_TICKERS = {
@@ -53,9 +60,9 @@ MAG7_TICKERS = {
     "Tesla (TSLA)": "TSLA"
 }
 
-ALL_TICKERS = {**GLOBAL_TICKERS, **SECTOR_TICKERS, **ETF_TICKERS, **MAG7_TICKERS}
+ALL_TICKERS = {**GLOBAL_TICKERS, **SECTOR_TICKERS, **ETF_TICKERS, **TWENTYFOUR_TICKERS, **MAG7_TICKERS}
 
-# --- SENTIMENT ---
+# --- SENTIMENT, FETCH, STYLING (unchanged from previous version) ---
 def analyze_sentiment(text):
     if not text or not isinstance(text, str):
         return "⚖️ Neutral"
@@ -68,7 +75,6 @@ def analyze_sentiment(text):
     if bear_score > bull_score: return "🐻 Bearish"
     return "⚖️ Neutral"
 
-# --- BATCH DATA FETCH ---
 @st.cache_data(ttl=45)
 def fetch_all_market_data():
     tickers_list = list(ALL_TICKERS.values())
@@ -135,7 +141,6 @@ def get_ticker_news(ticker_symbol):
     except:
         return []
 
-# --- STYLING ---
 def color_pct(val):
     if pd.isna(val): return ''
     return 'color: #00ff00' if val > 0 else 'color: #ff4b4b' if val < 0 else ''
@@ -157,18 +162,20 @@ full_market = full_market.dropna(subset=['Change %'])
 global_df = full_market[full_market['Asset'].isin(GLOBAL_TICKERS.keys())].copy()
 sector_df = full_market[full_market['Asset'].isin(SECTOR_TICKERS.keys())].copy()
 etf_df = full_market[full_market['Asset'].isin(ETF_TICKERS.keys())].copy()
+twentyfour_df = full_market[full_market['Asset'].isin(TWENTYFOUR_TICKERS.keys())].copy()
 mag7_df = full_market[full_market['Asset'].isin(MAG7_TICKERS.keys())].copy()
 
 global_df = global_df.sort_values('Change %', ascending=False)
 sector_df = sector_df.sort_values('Change %', ascending=False)
 etf_df = etf_df.sort_values('Change %', ascending=False)
+twentyfour_df = twentyfour_df.sort_values('Change %', ascending=False)
 mag7_df = mag7_df.sort_values('Change %', ascending=False)
 
-# Benchmark for RS
+# Benchmark RS
 benchmark = "SPY (S&P 500 ETF)"
 benchmark_change = 0
 if benchmark in full_market['Asset'].values:
-    benchmark_change = full_market[full_market['Asset'] == benchmark]['Change %'].iloc[0]
+    benchmark_change = full_market[full_market[' territoriale'] == benchmark]['Change %'].iloc[0]
 else:
     benchmark = "S&P 500 Futures (ES)"
     if benchmark in full_market['Asset'].values:
@@ -176,15 +183,15 @@ else:
 
 sector_df['RS'] = sector_df['Change %'] - benchmark_change
 etf_df['RS'] = etf_df['Change %'] - benchmark_change
+twentyfour_df['RS'] = twentyfour_df['Change %'] - benchmark_change
 mag7_df['RS'] = mag7_df['Change %'] - benchmark_change
 
 top_gainers = full_market.sort_values('Change %', ascending=False).head(6)
 top_losers = full_market.sort_values('Change %', ascending=True).head(6)
 
-# --- MOVER SENTIMENT & NEWS (pre-fetch for speed) ---
+# --- MOVER SENTIMENT & NEWS ---
 mover_sentiments = {}
 mover_news_dict = {}
-
 top_movers = pd.concat([top_gainers, top_losers]).drop_duplicates(subset='Asset')
 
 for _, row in top_movers.iterrows():
@@ -205,7 +212,7 @@ for _, row in top_movers.iterrows():
             overall = "⚖️ Neutral"
     mover_sentiments[row['Asset']] = overall
 
-# --- SIDEBAR ---
+# --- SIDEBAR (unchanged logic, just uses new movers) ---
 st.sidebar.title("🏛️ Market Settings")
 refresh = st.sidebar.number_input('Refresh rate (sec)', 15, 600, 30)
 st_autorefresh(interval=refresh * 1000, key="datarefresh")
@@ -213,7 +220,6 @@ st_autorefresh(interval=refresh * 1000, key="datarefresh")
 st.sidebar.divider()
 st.sidebar.subheader("📰 Mover News & Sentiment")
 
-# Leaders
 st.sidebar.markdown("**Leaders 🚀**")
 for _, row in top_gainers.iterrows():
     overall = mover_sentiments.get(row['Asset'], "⚖️ Neutral")
@@ -221,7 +227,7 @@ for _, row in top_gainers.iterrows():
     news_items = mover_news_dict.get(row['Asset'], [])
     with st.sidebar.expander(f"{row['Asset']} ({row['Change %']:+.2f}%) {overall}{vol_note}"):
         if news_items:
-            st.markdown(f"**Overall Sentiment: {overall}** (from {len(news_items)} headlines)")
+            st.markdown(f"**Overall: {overall}**")
             for item in news_items:
                 title = item.get('title', 'No Title')
                 link = item.get('link', '#')
@@ -231,9 +237,8 @@ for _, row in top_gainers.iterrows():
                 st.caption(f"Source: {publisher}")
                 st.divider()
         else:
-            st.write("No recent headlines found.")
+            st.write("No recent headlines.")
 
-# Laggards
 st.sidebar.markdown("**Laggards 📉**")
 for _, row in top_losers.iterrows():
     overall = mover_sentiments.get(row['Asset'], "⚖️ Neutral")
@@ -241,7 +246,7 @@ for _, row in top_losers.iterrows():
     news_items = mover_news_dict.get(row['Asset'], [])
     with st.sidebar.expander(f"{row['Asset']} ({row['Change %']:+.2f}%) {overall}{vol_note}"):
         if news_items:
-            st.markdown(f"**Overall Sentiment: {overall}** (from {len(news_items)} headlines)")
+            st.markdown(f"**Overall: {overall}**")
             for item in news_items:
                 title = item.get('title', 'No Title')
                 link = item.get('link', '#')
@@ -251,13 +256,12 @@ for _, row in top_losers.iterrows():
                 st.caption(f"Source: {publisher}")
                 st.divider()
         else:
-            st.write("No recent headlines found.")
+            st.write("No recent headlines.")
 
 # --- MAIN ---
 st.title("🏛️ Pro Market Terminal")
 st.caption(f"Status: Live | EST Time: {time_now} | Auto-Refresh: {refresh}s")
 
-# Scanner
 st.subheader("🔍 Market Scanner")
 col_g, col_l, col_b = st.columns([2, 2, 1])
 
@@ -283,8 +287,7 @@ with col_b:
 
 st.divider()
 
-# Tabs (unchanged from previous version)
-tab1, tab2, tab3 = st.tabs(["🌎 Global Indices", "📈 Sectors, ETFs & Mag7", "📊 Relative Strength & Charts"])
+tab1, tab2, tab3 = st.tabs(["🌎 Global Indices", "📈 Sectors, ETFs, 24h & Mag7", "📊 Relative Strength & Charts"])
 
 with tab1:
     st.subheader("Major Markets & Indices")
@@ -296,49 +299,43 @@ with tab1:
     st.dataframe(styled, use_container_width=True, hide_index=True)
 
 with tab2:
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c4 = st.columns(4)
     with c1:
-        st.subheader("Sectors (SPDR)")
+        st.subheader("Sectors")
         styled_sector = sector_df.drop(columns=['Symbol']).style.format({
-            "Price": "{:.2f}",
-            "Change %": "{:+.2f}%",
-            "Rel Vol": lambda x: f"{x:.2f}x" if not pd.isna(x) else "-",
-            "RS": "{:+.2f}"
+            "Price": "{:.2f}", "Change %": "{:+.2f}%", "Rel Vol": lambda x: f"{x:.2f}x" if not pd.isna(x) else "-", "RS": "{:+.2f}"
         }).map(color_pct, subset=["Change %", "RS"]).map(color_rel, subset="Rel Vol")
         st.dataframe(styled_sector, use_container_width=True, hide_index=True)
     with c2:
-        st.subheader("Key ETFs")
+        st.subheader("ETFs")
         styled_etf = etf_df.drop(columns=['Symbol']).style.format({
-            "Price": "{:.2f}",
-            "Change %": "{:+.2f}%",
-            "Rel Vol": lambda x: f"{x:.2f}x" if not pd.isna(x) else "-",
-            "RS": "{:+.2f}"
+            "Price": "{:.2f}", "Change %": "{:+.2f}%", "Rel Vol": lambda x: f"{x:.2f}x" if not pd.isna(x) else "-", "RS": "{:+.2f}"
         }).map(color_pct, subset=["Change %", "RS"]).map(color_rel, subset="Rel Vol")
         st.dataframe(styled_etf, use_container_width=True, hide_index=True)
     with c3:
+        st.subheader("24h & Commodities")
+        styled_24h = twentyfour_df.drop(columns=['Symbol']).style.format({
+            "Price": "{:.2f}", "Change %": "{:+.2f}%", "Rel Vol": lambda x: f"{x:.2f}x" if not pd.isna(x) else "-", "RS": "{:+.2f}"
+        }).map(color_pct, subset=["Change %", "RS"]).map(color_rel, subset="Rel Vol")
+        st.dataframe(styled_24h, use_container_width=True, hide_index=True)
+    with c4:
         st.subheader("Magnificent 7")
         styled_mag = mag7_df.drop(columns=['Symbol']).style.format({
-            "Price": "{:.2f}",
-            "Change %": "{:+.2f}%",
-            "Rel Vol": lambda x: f"{x:.2f}x" if not pd.isna(x) else "-",
-            "RS": "{:+.2f}"
+            "Price": "{:.2f}", "Change %": "{:+.2f}%", "Rel Vol": lambda x: f"{x:.2f}x" if not pd.isna(x) else "-", "RS": "{:+.2f}"
         }).map(color_pct, subset=["Change %", "RS"]).map(color_rel, subset="Rel Vol")
         st.dataframe(styled_mag, use_container_width=True, hide_index=True)
 
 with tab3:
     st.subheader(f"Relative Strength (vs. {benchmark})")
-    rs_sector = sector_df.sort_values('RS', ascending=False)
-    st.write("**Sectors**")
-    st.bar_chart(rs_sector, y="Asset", x="RS", color="RS", use_container_width=True)
+    for name, df in [("Sectors", sector_df), ("24h & Commodities", twentyfour_df), ("Magnificent 7", mag7_df)]:
+        rs_sorted = df.sort_values('RS', ascending=False)
+        st.write(f"**{name}**")
+        st.bar_chart(rs_sorted, y="Asset", x="RS", color="RS", use_container_width=True)
+        st.divider()
 
-    rs_mag = mag7_df.sort_values('RS', ascending=False)
-    st.write("**Magnificent 7**")
-    st.bar_chart(rs_mag, y="Asset", x="RS", color="RS", use_container_width=True)
-
-    st.divider()
-    st.subheader("Intraday Charts (EST)")
+    st.subheader("Intraday Charts (EST / 24h where applicable)")
     selected = st.multiselect('Select Asset to View', list(ALL_TICKERS.keys()),
-                              default=["SPY (S&P 500 ETF)", "QQQ (Nasdaq 100 ETF)", "Nvidia (NVDA)", "Technology (XLK)"])
+                              default=["SPY (S&P 500 ETF)", "Bitcoin 24h (BTC-USD)", "Nvidia (NVDA)", "Technology (XLK)"])
     for label in selected:
         ticker = ALL_TICKERS[label]
         data = yf.Ticker(ticker).history(period='1d', interval='5m')
