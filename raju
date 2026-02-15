@@ -1,0 +1,115 @@
+import streamlit as st
+import yfinance as yf
+import pandas as pd
+import numpy as np
+from datetime import datetime
+
+st.set_page_config(page_title="Live Market Dashboard", layout="wide")
+
+st.title("📊 Live Market Dashboard")
+st.caption(f"Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+# Tickers
+TICKERS = {
+    "S&P 500 (SPY)": "SPY",
+    "Nasdaq 100 (QQQ)": "QQQ",
+    "Dow Jones (DIA)": "DIA",
+    "Russell 2000 (IWM)": "IWM",
+    "VIX": "^VIX",
+    "10Y Yield (^TNX)": "^TNX",
+    "DXY": "DX-Y.NYB",
+}
+
+# Fetch data (cached briefly to reduce API calls)
+@st.cache_data(ttl=30)
+def get_data():
+    rows = []
+    for label, ticker in TICKERS.items():
+        try:
+            t = yf.Ticker(ticker)
+            hist = t.history(period="1d", interval="1m")
+            if not hist.empty:
+                last = hist["Close"].iloc[-1]
+                prev = t.history(period="2d")["Close"].iloc[-2]
+                pct = (last - prev) / prev * 100
+                rows.append([label, last, pct])
+            else:
+                rows.append([label, np.nan, np.nan])
+        except Exception:
+            rows.append([label, np.nan, np.nan])
+    return pd.DataFrame(rows, columns=["Index", "Last Price", "% Change"])
+
+def market_score(df):
+    score = 0
+    try:
+        nasdaq = df.loc[df["Index"] == "Nasdaq 100 (QQQ)", "% Change"].values[0]
+        spx = df.loc[df["Index"] == "S&P 500 (SPY)", "% Change"].values[0]
+        vix = df.loc[df["Index"] == "VIX", "% Change"].values[0]
+        dxy = df.loc[df["Index"] == "DXY", "% Change"].values[0]
+        y10 = df.loc[df["Index"] == "10Y Yield (^TNX)", "% Change"].values[0]
+
+        if not np.isnan(nasdaq) and nasdaq > 0:
+            score += 1
+        if not np.isnan(spx) and spx > 0:
+            score += 1
+        if not np.isnan(vix):
+            if vix < 0:
+                score += 1
+            elif vix > 5:
+                score -= 1
+        if not np.isnan(dxy):
+            score += 1 if dxy < 0 else -1
+        if not np.isnan(y10):
+            score += 1 if y10 < 0 else -1
+    except Exception:
+        pass
+    return score
+
+def color_pct(val):
+    if pd.isna(val):
+        return ''
+    if val > 0:
+        return 'color: green'
+    if val < 0:
+        return 'color: red'
+    return 'color: orange'
+
+# Sidebar controls
+refresh = st.sidebar.number_input('Auto refresh interval (seconds)', min_value=15, max_value=600, value=60, step=15)
+st.sidebar.markdown('**Controls**')
+st.sidebar.write('Choose indices to chart and set refresh interval.')
+
+# Data fetch
+with st.spinner('Fetching market data...'):
+    df = get_data()
+
+score = market_score(df)
+if score >= 3:
+    condition = '🟢 Strong Risk-On'
+elif score >= 1:
+    condition = '🟡 Neutral / Mixed'
+else:
+    condition = '🔴 Risk-Off / Selloff Conditions'
+
+st.subheader(f"Market Condition: {condition}")
+
+st.subheader('📈 Market Overview')
+st.dataframe(
+    df.style.format({"Last Price": "{:.2f}", "% Change": "{:.2f}%"})
+      .applymap(color_pct, subset=["% Change"]),
+    height=350
+)
+
+st.subheader('📉 Intraday Charts')
+selected = st.multiselect('Select indices to chart', df['Index'].tolist(), default=['S&P 500 (SPY)', 'Nasdaq 100 (QQQ)'])
+
+for label in selected:
+    ticker = TICKERS[label]
+    hist = yf.Ticker(ticker).history(period='1d', interval='5m')
+    if not hist.empty:
+        st.write(f"**{label}**")
+        st.line_chart(hist['Close'])
+    else:
+        st.write(f"**{label}** — no intraday data available")
+
+st.caption('Tip: refresh the page or press the Streamlit refresh button to update. The app caches data briefly to reduce API calls.')
