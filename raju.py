@@ -49,14 +49,11 @@ def fetch_market_data(ticker_dict):
     for label, ticker in ticker_dict.items():
         try:
             t = yf.Ticker(ticker)
-            # Fetch 5 days to ensure we have a solid 'Yesterday' close regardless of weekends
             hist = t.history(period="5d", interval="1d")
-            
             if len(hist) >= 2:
-                last_close = hist["Close"].iloc[-2] # The actual yesterday/prev session close
+                last_close = hist["Close"].iloc[-2]
                 current_price = t.fast_info.last_price
                 pct_change = ((current_price - last_close) / last_close) * 100
-                
                 rows.append({
                     "Asset": label, 
                     "Symbol": ticker, 
@@ -70,11 +67,9 @@ def fetch_market_data(ticker_dict):
 @st.cache_data(ttl=300)
 def get_impact_news(ticker_symbol):
     try:
-        news = yf.Ticker(ticker_symbol).news[:5]
-        if ticker_symbol in IMPACT_MAP:
-            for stock in IMPACT_MAP[ticker_symbol]:
-                news += yf.Ticker(stock).news[:2]
-        return news
+        t = yf.Ticker(ticker_symbol)
+        news = t.news if hasattr(t, 'news') else []
+        return news[:5]
     except: return []
 
 def color_pct(val):
@@ -83,10 +78,9 @@ def color_pct(val):
 
 # --- APP LAYOUT ---
 st.sidebar.title("⚡ Impact Terminal")
-refresh = st.sidebar.number_input('Refresh rate (sec)', 15, 600, 30)
-st_autorefresh(interval=refresh * 1000, key="datarefresh")
+refresh_rate = st.sidebar.number_input('Refresh rate (sec)', 15, 600, 30)
+st_autorefresh(interval=refresh_rate * 1000, key="datarefresh")
 
-# Fetch data
 global_df = fetch_market_data(GLOBAL_TICKERS)
 sector_df = fetch_market_data(SECTOR_TICKERS)
 etf_df = fetch_market_data(ETF_TICKERS)
@@ -97,45 +91,43 @@ top_3 = full_market.sort_values('Change %', ascending=False).head(3)
 # LIVE IMPACT SIDEBAR
 st.sidebar.subheader("🎯 Stock-Level Impact")
 for _, row in top_3.iterrows():
-    with st.sidebar.expander(f"NEWS: {row['Asset']}", expanded=True):
+    with st.sidebar.expander(f"NEWS: {row['Asset']}", expanded=False):
         articles = get_impact_news(row['Symbol'])
         if articles:
             for art in articles:
-                title = art.get('title', 'N/A')
-                sentiment = analyze_sentiment(title)
-                impact_badge = "⚠️ IMPACT" if any(s in title.upper() for s in IMPACT_MAP.get(row['Symbol'], [])) else ""
-                st.markdown(f"**{sentiment}** {impact_badge}")
-                st.markdown(f"[{title}]({art.get('link','#')})")
-                st.caption(f"Source: {art.get('publisher','Unknown')}")
+                title = art.get('title', 'Headline Unavailable')
+                link = art.get('link', '#')
+                st.markdown(f"**{analyze_sentiment(title)}**")
+                st.markdown(f"[{title}]({link})")
+                st.caption(f"Source: {art.get('publisher', 'Unknown')}")
                 st.divider()
+        else:
+            st.write("No news found for this asset.")
 
 # MAIN CONTENT
 st.title("🏛️ Market Impact Terminal")
 est = pytz.timezone('US/Eastern')
-st.caption(f"Live EST: {datetime.datetime.now(est).strftime('%H:%M:%S')} | Refresh: {refresh}s")
+st.caption(f"Live EST: {datetime.datetime.now(est).strftime('%H:%M:%S')} | Refresh: {refresh_rate}s")
 
-# SCANNER METRICS
 m1, m2, m3 = st.columns(3)
 with m1: st.metric("Top Leader", top_3.iloc[0]['Asset'], f"{top_3.iloc[0]['Change %']:.2f}%")
 with m2: 
-    up = len(full_market[full_market['Change %']>0])
-    down = len(full_market[full_market['Change %']<0])
+    up, down = len(full_market[full_market['Change %']>0]), len(full_market[full_market['Change %']<0])
     st.metric("Breadth (Up/Down)", f"{up} / {down}", delta=f"{up-down}")
 with m3:
     vix_row = full_market[full_market['Symbol']=='^VIX']
     if not vix_row.empty:
-        st.metric("VIX (Fear Index)", f"{vix_row['Current Price'].values[0]:.2f}", f"{vix_row['Change %'].values[0]:.2f}%", delta_color="inverse")
+        st.metric("VIX Index", f"{vix_row['Current Price'].values[0]:.2f}", f"{vix_row['Change %'].values[0]:.2f}%", delta_color="inverse")
 
 st.divider()
 
-# TABS
 t1, t2, t3 = st.tabs(["🌎 Markets & Prices", "📊 Relative Strength", "📈 Intraday Charts"])
 
 with t1:
     st.subheader("Yesterday vs. Today")
-    display_cols = ['Asset', 'Last Close', 'Current Price', 'Change %']
+    # Column names here must match the map() function exactly
     st.dataframe(
-        full_market[display_cols].style.format({
+        full_market[['Asset', 'Last Close', 'Current Price', 'Change %']].style.format({
             'Last Close': '{:.2f}', 
             'Current Price': '{:.2f}', 
             'Change %': '{:+.2f}%'
