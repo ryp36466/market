@@ -62,12 +62,12 @@ MAG7_TICKERS = {
 
 ALL_TICKERS = {**GLOBAL_TICKERS, **SECTOR_TICKERS, **ETF_TICKERS, **TWENTYFOUR_TICKERS, **MAG7_TICKERS}
 
-# --- SENTIMENT, FETCH, STYLING (unchanged from previous version) ---
+# --- SENTIMENT ---
 def analyze_sentiment(text):
     if not text or not isinstance(text, str):
         return "⚖️ Neutral"
     bullish_words = ['surge', 'up', 'rise', 'gain', 'jump', 'rally', 'growth', 'bull', 'high', 'positive', 'win', 'beat', 'boost', 'strong', 'outperform', 'soar', 'raises']
-    bearish_words = ['fall', 'down', 'drop', 'slump', 'plunge', 'bear', 'low', 'negative', 'loss', 'crash', 'dip', 'cut', 'sink', 'weak', 'miss', 'lowers', 'decline']
+    bearish_words = ['fall', 'down', 'drop', 'slump', 'plunge', 'bear', 'low', 'negative', 'loss', 'crash', 'dip', 'cut', 'sink', 'weak, 'miss', 'lowers', 'decline']
     text = text.lower()
     bull_score = sum(1 for word in bullish_words if word in text)
     bear_score = sum(1 for word in bearish_words if word in text)
@@ -75,6 +75,7 @@ def analyze_sentiment(text):
     if bear_score > bull_score: return "🐻 Bearish"
     return "⚖️ Neutral"
 
+# --- BATCH DATA FETCH ---
 @st.cache_data(ttl=45)
 def fetch_all_market_data():
     tickers_list = list(ALL_TICKERS.values())
@@ -141,6 +142,7 @@ def get_ticker_news(ticker_symbol):
     except:
         return []
 
+# --- STYLING ---
 def color_pct(val):
     if pd.isna(val): return ''
     return 'color: #00ff00' if val > 0 else 'color: #ff4b4b' if val < 0 else ''
@@ -171,15 +173,21 @@ etf_df = etf_df.sort_values('Change %', ascending=False)
 twentyfour_df = twentyfour_df.sort_values('Change %', ascending=False)
 mag7_df = mag7_df.sort_values('Change %', ascending=False)
 
-# Benchmark RS
+# Benchmark for RS (fixed typo here)
 benchmark = "SPY (S&P 500 ETF)"
-benchmark_change = 0
+benchmark_change = 0.0
 if benchmark in full_market['Asset'].values:
-    benchmark_change = full_market[full_market[' territoriale'] == benchmark]['Change %'].iloc[0]
+    try:
+        benchmark_change = full_market[full_market['Asset'] == benchmark]['Change %'].iloc[0]
+    except:
+        benchmark_change = 0.0
 else:
     benchmark = "S&P 500 Futures (ES)"
     if benchmark in full_market['Asset'].values:
-        benchmark_change = full_market[full_market['Asset'] == benchmark]['Change %'].iloc[0]
+        try:
+            benchmark_change = full_market[full_market['Asset'] == benchmark]['Change %'].iloc[0]
+        except:
+            benchmark_change = 0.0
 
 sector_df['RS'] = sector_df['Change %'] - benchmark_change
 etf_df['RS'] = etf_df['Change %'] - benchmark_change
@@ -212,7 +220,7 @@ for _, row in top_movers.iterrows():
             overall = "⚖️ Neutral"
     mover_sentiments[row['Asset']] = overall
 
-# --- SIDEBAR (unchanged logic, just uses new movers) ---
+# --- SIDEBAR ---
 st.sidebar.title("🏛️ Market Settings")
 refresh = st.sidebar.number_input('Refresh rate (sec)', 15, 600, 30)
 st_autorefresh(interval=refresh * 1000, key="datarefresh")
