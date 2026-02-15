@@ -175,7 +175,8 @@ if not news_data.empty:
         # Using an expander to keep the sidebar clean
         with st.sidebar.expander(f"{row['Source']} | {row['Date']}"):
             st.write(row['Title'])
-            st.markdown(f"[Read Article]({row['URL']})")
+            link = row.get('url') or row.get('URL')
+            st.markdown(f"[Read Article]({link})")
 else:
     st.sidebar.info("News feed temporarily unavailable.")
 
