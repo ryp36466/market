@@ -13,6 +13,7 @@ st.caption(f"Updated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 # Tickers Dictionary
 TICKERS = {
+    "S&P 500 Index ($SPX)": "^GSPC",
     "S&P 500 (SPY)": "SPY",
     "Nasdaq 100 (QQQ)": "QQQ",
     "Dow Jones (DIA)": "DIA",
@@ -58,7 +59,8 @@ def market_score(df):
             return val[0] if len(val) > 0 else np.nan
 
         nasdaq = get_pct("Nasdaq 100 (QQQ)")
-        spx = get_pct("S&P 500 (SPY)")
+        spx = get_pct("S&P 500 Index ($SPX)")
+        spy = get_pct("S&P 500 (SPY)")
         vix = get_pct("VIX")
         dxy = get_pct("DXY")
         y10 = get_pct("10Y Yield (^TNX)")
