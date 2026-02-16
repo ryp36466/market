@@ -382,35 +382,40 @@ import streamlit as st
 import yfinance as yf
 
 def display_options_sentiment(ticker_symbol):
-    st.subheader(f"Options Sentiment for {ticker_symbol}")
+    st.subheader(f"Total Market Sentiment: {ticker_symbol}")
     ticker = yf.Ticker(ticker_symbol)
     
     try:
-        expiration = ticker.options[0]
-        opt = ticker.option_chain(expiration)
+        # 1. Get all available expiration dates
+        expirations = ticker.options
         
-        # Calculate Totals
-        total_call_vol = opt.calls['volume'].sum()
-        total_put_vol = opt.puts['volume'].sum()
+        if not expirations:
+            st.warning(f"No options found for {ticker_symbol}")
+            return
+
+        total_calls_vol = 0
+        total_puts_vol = 0
         
-        # Calculate Ratio
-        vol_pcr = total_put_vol / total_call_vol if total_call_vol > 0 else 0
+        # 2. Loop through the first 5 expirations and sum volumes
+        # This gives a "Daily Total" across the most active dates
+        for exp in expirations[:5]:
+            opt = ticker.option_chain(exp)
+            total_calls_vol += opt.calls['volume'].sum()
+            total_puts_vol += opt.puts['volume'].sum()
         
-        # Display as interactive metrics
+        # 3. Calculate the aggregated Put/Call Ratio
+        vol_pcr = total_puts_vol / total_calls_vol if total_calls_vol > 0 else 0
+        
+        # 4. Display results
         col1, col2 = st.columns(2)
-        col1.metric("Volume PCR", f"{vol_pcr:.2f}")
+        col1.metric("Total Volume PCR", f"{vol_pcr:.2f}", help="Sum of daily volume across the next 5 expiration dates.")
         
         if vol_pcr < 0.7:
-            col2.success("Sentiment: Bullish")
+            col2.success("Sentiment: Strongly Bullish")
         elif vol_pcr > 1.1:
-            col2.error("Sentiment: Bearish")
+            col2.error("Sentiment: Strongly Bearish")
         else:
-            col2.info("Sentiment: Neutral")
+            col2.info("Sentiment: Neutral / Balanced")
             
     except Exception as e:
-        st.warning(f"Could not fetch options for {ticker_symbol}")
-
-# UI input to trigger the function
-target = st.text_input("Analyze Options Sentiment (Ticker):", "AAPL")
-if target:
-    display_options_sentiment(target)
+        st.error(f"Error fetching aggregated data: {e}")
