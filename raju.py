@@ -6,6 +6,7 @@ from streamlit_autorefresh import st_autorefresh
 import datetime
 import pytz
 from finvizfinance.news import News
+import plotly.express as px
 # Page configuration
 st.set_page_config(page_title="Pro Market Terminal", page_icon="🏛️", layout="wide")
 
@@ -419,3 +420,55 @@ def display_options_sentiment(ticker_symbol):
             
     except Exception as e:
         st.error(f"Error fetching aggregated data: {e}")
+
+def display_options_sentiment(ticker_symbol):
+    st.subheader(f"Total Market Sentiment: {ticker_symbol}")
+    ticker = yf.Ticker(ticker_symbol)
+    
+    try:
+        expirations = ticker.options
+        if not expirations:
+            st.warning(f"No options found for {ticker_symbol}")
+            return
+
+        total_calls_vol = 0
+        total_puts_vol = 0
+        
+        # Aggregating data from the first 5 expiration dates
+        for exp in expirations[:5]:
+            opt = ticker.option_chain(exp)
+            total_calls_vol += opt.calls['volume'].sum()
+            total_puts_vol += opt.puts['volume'].sum()
+        
+        vol_pcr = total_puts_vol / total_calls_vol if total_calls_vol > 0 else 0
+        
+        # UI Layout: Metrics on top, Chart below
+        col1, col2 = st.columns(2)
+        col1.metric("Aggregated PCR", f"{vol_pcr:.2f}")
+        
+        if vol_pcr < 0.7:
+            col2.success("Sentiment: Strongly Bullish")
+        elif vol_pcr > 1.1:
+            col2.error("Sentiment: Strongly Bearish")
+        else:
+            col2.info("Sentiment: Neutral / Balanced")
+
+        # Create the Pie Chart
+        df_pie = pd.DataFrame({
+            "Type": ["Calls", "Puts"],
+            "Volume": [total_calls_vol, total_puts_vol]
+        })
+        
+        fig = px.pie(
+            df_pie, 
+            values='Volume', 
+            names='Type', 
+            title=f"Call vs Put Volume (Next 5 Expirations)",
+            color='Type',
+            color_discrete_map={'Calls': '#00ff00', 'Puts': '#ff0000'} # Green for Calls, Red for Puts
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+            
+    except Exception as e:
+        st.error(f"Error fetching data: {e}")
