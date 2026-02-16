@@ -377,3 +377,40 @@ with tab3:
             data.index = data.index.tz_convert('US/Eastern')
             st.write(f"**{label}**")
             st.line_chart(data['Close'], use_container_width=True)
+
+import streamlit as st
+import yfinance as yf
+
+def display_options_sentiment(ticker_symbol):
+    st.subheader(f"Options Sentiment for {ticker_symbol}")
+    ticker = yf.Ticker(ticker_symbol)
+    
+    try:
+        expiration = ticker.options[0]
+        opt = ticker.option_chain(expiration)
+        
+        # Calculate Totals
+        total_call_vol = opt.calls['volume'].sum()
+        total_put_vol = opt.puts['volume'].sum()
+        
+        # Calculate Ratio
+        vol_pcr = total_put_vol / total_call_vol if total_call_vol > 0 else 0
+        
+        # Display as interactive metrics
+        col1, col2 = st.columns(2)
+        col1.metric("Volume PCR", f"{vol_pcr:.2f}")
+        
+        if vol_pcr < 0.7:
+            col2.success("Sentiment: Bullish")
+        elif vol_pcr > 1.1:
+            col2.error("Sentiment: Bearish")
+        else:
+            col2.info("Sentiment: Neutral")
+            
+    except Exception as e:
+        st.warning(f"Could not fetch options for {ticker_symbol}")
+
+# UI input to trigger the function
+target = st.text_input("Analyze Options Sentiment (Ticker):", "AAPL")
+if target:
+    display_options_sentiment(target)
