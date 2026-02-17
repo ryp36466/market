@@ -7,6 +7,7 @@ import datetime
 import pytz
 from finvizfinance.news import News
 import plotly.express as px
+import requests
 # Page configuration
 st.set_page_config(page_title="Pro Market Terminal", page_icon="🏛️", layout="wide")
 
