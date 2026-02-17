@@ -7,11 +7,11 @@ import datetime
 import pytz
 from finvizfinance.news import News
 import plotly.express as px
-import requests
+
 # Page configuration
 st.set_page_config(page_title="Pro Market Terminal", page_icon="🏛️", layout="wide")
 
-# --- TICKER CONFIGURATIONS ---
+# ── TICKER CONFIGURATIONS ──
 GLOBAL_TICKERS = {
     "S&P 500 Futures (ES)": "ES=F",
     "Nasdaq 100 Futures (NQ)": "NQ=F",
@@ -64,7 +64,7 @@ MAG7_TICKERS = {
 
 ALL_TICKERS = {**GLOBAL_TICKERS, **SECTOR_TICKERS, **ETF_TICKERS, **TWENTYFOUR_TICKERS, **MAG7_TICKERS}
 
-# --- SENTIMENT ---
+# ── SENTIMENT ANALYSIS ──
 def analyze_sentiment(text):
     if not text or not isinstance(text, str):
         return "⚖️ Neutral"
@@ -73,11 +73,13 @@ def analyze_sentiment(text):
     text = text.lower()
     bull_score = sum(1 for word in bullish_words if word in text)
     bear_score = sum(1 for word in bearish_words if word in text)
-    if bull_score > bear_score: return "🐂 Bullish"
-    if bear_score > bull_score: return "🐻 Bearish"
+    if bull_score > bear_score:
+        return "🐂 Bullish"
+    if bear_score > bull_score:
+        return "🐻 Bearish"
     return "⚖️ Neutral"
 
-# --- BATCH DATA FETCH ---
+# ── BATCH MARKET DATA FETCH ──
 @st.cache_data(ttl=45)
 def fetch_all_market_data():
     tickers_list = list(ALL_TICKERS.values())
@@ -101,9 +103,8 @@ def fetch_all_market_data():
                 intra_close = intra_data['Close'][ticker].dropna()
                 if len(intra_close) > 0:
                     current_price = intra_close.iloc[-1]
-            if np.isnan(current_price):
-                if 'Close' in daily_data and ticker in daily_data['Close']:
-                    current_price = daily_data['Close'][ticker].iloc[-1]
+            if np.isnan(current_price) and 'Close' in daily_data and ticker in daily_data['Close']:
+                current_price = daily_data['Close'][ticker].iloc[-1]
 
             pct_change = np.nan
             if not np.isnan(current_price) and not np.isnan(prev_close) and prev_close > 0:
@@ -130,7 +131,7 @@ def fetch_all_market_data():
                 "Change %": pct_change,
                 "Rel Vol": rel_vol
             })
-        except:
+        except Exception:
             rows.append({
                 "Asset": label, "Symbol": ticker,
                 "Price": np.nan, "Change %": np.nan, "Rel Vol": np.nan
@@ -144,10 +145,12 @@ def get_ticker_news(ticker_symbol):
     except:
         return []
 
-# --- STYLING ---
+# ── STYLING FUNCTIONS ──
 def color_pct(val):
     if pd.isna(val): return ''
-    return 'color: #00ff00' if val > 0 else 'color: #ff4b4b' if val < 0 else ''
+    if val > 0: return 'color: #00ff00'
+    if val < 0: return 'color: #ff4b4b'
+    return ''
 
 def color_rel(val):
     if pd.isna(val): return ''
@@ -155,77 +158,58 @@ def color_rel(val):
     if val > 1.5: return 'background-color: #98fb98'
     if val < 0.5: return 'background-color: #ffb6c1'
     return ''
-    
+
 @st.cache_data(ttl=600)
 def fetch_finviz_news():
     try:
         fnews = News()
-        # This gets the latest general market news from Finviz
         df_news = fnews.get_news()['news']
-        return df_news.head(10) # Return top 10 headlines
+        return df_news.head(10)
     except:
         return pd.DataFrame()
 
-# --- Finviz News Section in Sidebar ---
+# ── SIDEBAR ──
 st.sidebar.divider()
 st.sidebar.subheader("🗞️ Market Intelligence")
 
 news_data = fetch_finviz_news()
-
 if not news_data.empty:
     for _, row in news_data.iterrows():
-        # Using an expander to keep the sidebar clean
         with st.sidebar.expander(f"{row['Source']} | {row['Date']}"):
             st.write(row['Title'])
             link = row.get('url') or row.get('URL')
-            st.markdown(f"[Read Article]({link})")
+            if link:
+                st.markdown(f"[Read Article]({link})")
 else:
     st.sidebar.info("News feed temporarily unavailable.")
 
-# --- APP LOGIC ---
+# ── MAIN APP LOGIC ──
 est = pytz.timezone('US/Eastern')
 time_now = datetime.datetime.now(est).strftime('%H:%M:%S')
 
 full_market = fetch_all_market_data()
 full_market = full_market.dropna(subset=['Change %'])
 
-global_df = full_market[full_market['Asset'].isin(GLOBAL_TICKERS.keys())].copy()
-sector_df = full_market[full_market['Asset'].isin(SECTOR_TICKERS.keys())].copy()
-etf_df = full_market[full_market['Asset'].isin(ETF_TICKERS.keys())].copy()
+global_df   = full_market[full_market['Asset'].isin(GLOBAL_TICKERS.keys())].copy()
+sector_df   = full_market[full_market['Asset'].isin(SECTOR_TICKERS.keys())].copy()
+etf_df      = full_market[full_market['Asset'].isin(ETF_TICKERS.keys())].copy()
 twentyfour_df = full_market[full_market['Asset'].isin(TWENTYFOUR_TICKERS.keys())].copy()
-mag7_df = full_market[full_market['Asset'].isin(MAG7_TICKERS.keys())].copy()
+mag7_df     = full_market[full_market['Asset'].isin(MAG7_TICKERS.keys())].copy()
 
-global_df = global_df.sort_values('Change %', ascending=False)
-sector_df = sector_df.sort_values('Change %', ascending=False)
-etf_df = etf_df.sort_values('Change %', ascending=False)
-twentyfour_df = twentyfour_df.sort_values('Change %', ascending=False)
-mag7_df = mag7_df.sort_values('Change %', ascending=False)
+for df in [global_df, sector_df, etf_df, twentyfour_df, mag7_df]:
+    df.sort_values('Change %', ascending=False, inplace=True)
 
-# Benchmark for RS
+# Benchmark for Relative Strength
 benchmark = "SPY (S&P 500 ETF)"
-benchmark_change = 0.0
-if benchmark in full_market['Asset'].values:
-    try:
-        benchmark_change = full_market[full_market['Asset'] == benchmark]['Change %'].iloc[0]
-    except:
-        benchmark_change = 0.0
-else:
-    benchmark = "S&P 500 Futures (ES)"
-    if benchmark in full_market['Asset'].values:
-        try:
-            benchmark_change = full_market[full_market['Asset'] == benchmark]['Change %'].iloc[0]
-        except:
-            benchmark_change = 0.0
+benchmark_change = full_market.loc[full_market['Asset'] == benchmark, 'Change %'].iloc[0] if benchmark in full_market['Asset'].values else 0.0
 
-sector_df['RS'] = sector_df['Change %'] - benchmark_change
-etf_df['RS'] = etf_df['Change %'] - benchmark_change
-twentyfour_df['RS'] = twentyfour_df['Change %'] - benchmark_change
-mag7_df['RS'] = mag7_df['Change %'] - benchmark_change
+for df in [sector_df, etf_df, twentyfour_df, mag7_df]:
+    df['RS'] = df['Change %'] - benchmark_change
 
 top_gainers = full_market.sort_values('Change %', ascending=False).head(6)
-top_losers = full_market.sort_values('Change %', ascending=True).head(6)
+top_losers  = full_market.sort_values('Change %', ascending=True).head(6)
 
-# --- MOVER SENTIMENT & NEWS ---
+# Mover sentiment & news
 mover_sentiments = {}
 mover_news_dict = {}
 top_movers = pd.concat([top_gainers, top_losers]).drop_duplicates(subset='Asset')
@@ -233,22 +217,17 @@ top_movers = pd.concat([top_gainers, top_losers]).drop_duplicates(subset='Asset'
 for _, row in top_movers.iterrows():
     news_items = get_ticker_news(row['Symbol'])
     mover_news_dict[row['Asset']] = news_items
-    
+
     if not news_items:
         overall = "❓ No News"
     else:
         sentiments = [analyze_sentiment(item.get('title', '')) for item in news_items]
         bull_count = sum(1 for s in sentiments if "🐂" in s)
         bear_count = sum(1 for s in sentiments if "🐻" in s)
-        if bull_count > bear_count:
-            overall = "🐂 Bullish"
-        elif bear_count > bull_count:
-            overall = "🐻 Bearish"
-        else:
-            overall = "⚖️ Neutral"
+        overall = "🐂 Bullish" if bull_count > bear_count else "🐻 Bearish" if bear_count > bull_count else "⚖️ Neutral"
     mover_sentiments[row['Asset']] = overall
 
-# --- SIDEBAR ---
+# ── SIDEBAR CONTROLS ──
 st.sidebar.title("🏛️ Market Settings")
 refresh = st.sidebar.number_input('Refresh rate (sec)', 15, 600, 30)
 st_autorefresh(interval=refresh * 1000, key="datarefresh")
@@ -260,8 +239,8 @@ st.sidebar.markdown("**Leaders 🚀**")
 for _, row in top_gainers.iterrows():
     overall = mover_sentiments.get(row['Asset'], "⚖️ Neutral")
     vol_note = " 🔥" if row.get('Rel Vol', 0) > 1.5 else ""
-    news_items = mover_news_dict.get(row['Asset'], [])
     with st.sidebar.expander(f"{row['Asset']} ({row['Change %']:+.2f}%) {overall}{vol_note}"):
+        news_items = mover_news_dict.get(row['Asset'], [])
         if news_items:
             st.markdown(f"**Overall: {overall}**")
             for item in news_items:
@@ -279,8 +258,8 @@ st.sidebar.markdown("**Laggards 📉**")
 for _, row in top_losers.iterrows():
     overall = mover_sentiments.get(row['Asset'], "⚖️ Neutral")
     vol_note = " 🔥" if row.get('Rel Vol', 0) > 1.5 else ""
-    news_items = mover_news_dict.get(row['Asset'], [])
     with st.sidebar.expander(f"{row['Asset']} ({row['Change %']:+.2f}%) {overall}{vol_note}"):
+        news_items = mover_news_dict.get(row['Asset'], [])
         if news_items:
             st.markdown(f"**Overall: {overall}**")
             for item in news_items:
@@ -294,7 +273,7 @@ for _, row in top_losers.iterrows():
         else:
             st.write("No recent headlines.")
 
-# --- MAIN ---
+# ── MAIN PAGE ──
 st.title("🏛️ Pro Market Terminal")
 st.caption(f"Status: Live | EST Time: {time_now} | Auto-Refresh: {refresh}s")
 
@@ -323,7 +302,13 @@ with col_b:
 
 st.divider()
 
-tab1, tab2, tab3 = st.tabs(["🌎 Global Indices", "📈 Sectors, ETFs, 24h & Mag7", "📊 Relative Strength & Charts","⚖️ Mag7 Options Sentiment"])
+# ── TABS ──
+tab1, tab2, tab3, tab4 = st.tabs([
+    "🌎 Global Indices",
+    "📈 Sectors, ETFs, 24h & Mag7",
+    "📊 Relative Strength & Charts",
+    "⚖️ Mag7 Options Sentiment"
+])
 
 with tab1:
     st.subheader("Major Markets & Indices")
@@ -339,25 +324,29 @@ with tab2:
     with c1:
         st.subheader("Sectors")
         styled_sector = sector_df.drop(columns=['Symbol']).style.format({
-            "Price": "{:.2f}", "Change %": "{:+.2f}%", "Rel Vol": lambda x: f"{x:.2f}x" if not pd.isna(x) else "-", "RS": "{:+.2f}"
+            "Price": "{:.2f}", "Change %": "{:+.2f}%", "Rel Vol": lambda x: f"{x:.2f}x" if not pd.isna(x) else "-",
+            "RS": "{:+.2f}"
         }).map(color_pct, subset=["Change %", "RS"]).map(color_rel, subset="Rel Vol")
         st.dataframe(styled_sector, use_container_width=True, hide_index=True)
     with c2:
         st.subheader("ETFs")
         styled_etf = etf_df.drop(columns=['Symbol']).style.format({
-            "Price": "{:.2f}", "Change %": "{:+.2f}%", "Rel Vol": lambda x: f"{x:.2f}x" if not pd.isna(x) else "-", "RS": "{:+.2f}"
+            "Price": "{:.2f}", "Change %": "{:+.2f}%", "Rel Vol": lambda x: f"{x:.2f}x" if not pd.isna(x) else "-",
+            "RS": "{:+.2f}"
         }).map(color_pct, subset=["Change %", "RS"]).map(color_rel, subset="Rel Vol")
         st.dataframe(styled_etf, use_container_width=True, hide_index=True)
     with c3:
         st.subheader("24h & Commodities")
         styled_24h = twentyfour_df.drop(columns=['Symbol']).style.format({
-            "Price": "{:.2f}", "Change %": "{:+.2f}%", "Rel Vol": lambda x: f"{x:.2f}x" if not pd.isna(x) else "-", "RS": "{:+.2f}"
+            "Price": "{:.2f}", "Change %": "{:+.2f}%", "Rel Vol": lambda x: f"{x:.2f}x" if not pd.isna(x) else "-",
+            "RS": "{:+.2f}"
         }).map(color_pct, subset=["Change %", "RS"]).map(color_rel, subset="Rel Vol")
         st.dataframe(styled_24h, use_container_width=True, hide_index=True)
     with c4:
         st.subheader("Magnificent 7")
         styled_mag = mag7_df.drop(columns=['Symbol']).style.format({
-            "Price": "{:.2f}", "Change %": "{:+.2f}%", "Rel Vol": lambda x: f"{x:.2f}x" if not pd.isna(x) else "-", "RS": "{:+.2f}"
+            "Price": "{:.2f}", "Change %": "{:+.2f}%", "Rel Vol": lambda x: f"{x:.2f}x" if not pd.isna(x) else "-",
+            "RS": "{:+.2f}"
         }).map(color_pct, subset=["Change %", "RS"]).map(color_rel, subset="Rel Vol")
         st.dataframe(styled_mag, use_container_width=True, hide_index=True)
 
@@ -366,12 +355,15 @@ with tab3:
     for name, df in [("Sectors", sector_df), ("24h & Commodities", twentyfour_df), ("Magnificent 7", mag7_df)]:
         rs_sorted = df.sort_values('RS', ascending=False)
         st.write(f"**{name}**")
-        st.bar_chart(rs_sorted, y="Asset", x="RS", color="RS", use_container_width=True)
+        st.bar_chart(rs_sorted.set_index("Asset")["RS"], use_container_width=True)
         st.divider()
 
     st.subheader("Intraday Charts (EST / 24h where applicable)")
-    selected = st.multiselect('Select Asset to View', list(ALL_TICKERS.keys()),
-                              default=["SPY (S&P 500 ETF)", "Bitcoin 24h (BTC-USD)", "Nvidia (NVDA)", "Technology (XLK)"])
+    selected = st.multiselect(
+        'Select Asset to View',
+        list(ALL_TICKERS.keys()),
+        default=["SPY (S&P 500 ETF)", "Bitcoin 24h (BTC-USD)", "Nvidia (NVDA)", "Technology (XLK)"]
+    )
     for label in selected:
         ticker = ALL_TICKERS[label]
         data = yf.Ticker(ticker).history(period='1d', interval='5m')
@@ -380,25 +372,15 @@ with tab3:
             st.write(f"**{label}**")
             st.line_chart(data['Close'], use_container_width=True)
 
-
-# ── Add fourth tab for Mag7 Options Sentiment ──
-tab1, tab2, tab3, tab4 = st.tabs([
-    "🌎 Global Indices",
-    "📈 Sectors, ETFs, 24h & Mag7",
-    "📊 Relative Strength & Charts",
-    "⚖️ Mag7 Options Sentiment"
-])
-
-# ... keep your tab1, tab2, tab3 code as-is ...
-
 with tab4:
     st.subheader("Magnificent 7 Options Sentiment (Put/Call Volume Ratio)")
     st.caption(
         "Aggregated from nearest 5 expirations • "
-        "PCR = Put Vol / Call Vol • >1.0 = bearish tilt, <0.8 = bullish tilt"
+        "PCR = Put Volume / Call Volume • >1.0 → bearish tilt • <0.8 → bullish tilt • "
+        "Today's traded volume only"
     )
 
-    @st.cache_data(ttl=300, show_spinner="Loading Mag7 options data...")
+    @st.cache_data(ttl=300, show_spinner="Fetching Mag7 options chains...")
     def get_mag7_pcr():
         results = {}
         for label, symbol in MAG7_TICKERS.items():
@@ -406,22 +388,22 @@ with tab4:
                 ticker = yf.Ticker(symbol)
                 expirations = ticker.options
                 if not expirations:
-                    results[label] = {"error": "No options"}
+                    results[label] = {"error": "No options data"}
                     continue
 
-                call_vol = 0
-                put_vol = 0
+                call_vol = 0.0
+                put_vol  = 0.0
                 for exp in expirations[:5]:
                     chain = ticker.option_chain(exp)
                     call_vol += chain.calls["volume"].fillna(0).sum()
-                    put_vol += chain.puts["volume"].fillna(0).sum()
+                    put_vol  += chain.puts["volume"].fillna(0).sum()
 
                 pcr = put_vol / call_vol if call_vol > 0 else 0.0
                 sentiment = (
                     "🐂 Strongly Bullish" if pcr < 0.75 else
-                    "🐂 Bullish" if pcr < 0.90 else
-                    "⚖️ Neutral" if pcr < 1.10 else
-                    "🐻 Bearish" if pcr < 1.30 else
+                    "🐂 Bullish"          if pcr < 0.90 else
+                    "⚖️ Neutral"          if pcr < 1.10 else
+                    "🐻 Bearish"          if pcr < 1.30 else
                     "🐻 Strongly Bearish"
                 )
 
@@ -437,7 +419,6 @@ with tab4:
 
     data = get_mag7_pcr()
 
-    # Display in columns
     cols = st.columns(4)
     for i, (label, info) in enumerate(data.items()):
         col = cols[i % 4]
@@ -446,122 +427,26 @@ with tab4:
             continue
 
         col.metric(
-            label=f"{label}",
+            label=label,
             value=f"{info['pcr']:.2f}",
             delta=info['sentiment'],
-            help=f"Calls: {info['call_vol']:,} • Puts: {info['put_vol']:,}"
+            help=f"Call volume: {info['call_vol']:,} • Put volume: {info['put_vol']:,}"
         )
 
     st.divider()
 
-    # Optional aggregate view
+    # Aggregate
     total_call = sum(d.get("call_vol", 0) for d in data.values() if "error" not in d)
     total_put  = sum(d.get("put_vol",  0) for d in data.values() if "error" not in d)
-    agg_pcr = total_put / total_call if total_call > 0 else 0
+    agg_pcr = total_put / total_call if total_call > 0 else 0.0
 
     col1, col2 = st.columns([1, 3])
     col1.metric("Mag7 Aggregate PCR", f"{agg_pcr:.2f}")
-    if agg_pcr < 0.8:
-        col2.success("Overall bullish options flow in Mag7")
-    elif agg_pcr > 1.1:
-        col2.error("Overall bearish options flow in Mag7")
+    if agg_pcr < 0.80:
+        col2.success("**Overall bullish options flow** across Mag7")
+    elif agg_pcr > 1.10:
+        col2.error("**Overall bearish options flow** across Mag7")
     else:
-        col2.info("Balanced options sentiment in Mag7")
+        col2.info("**Balanced options sentiment** across Mag7")
 
-    st.caption("Data from yfinance • refreshed every 5 min • volume is today's traded volume")
- 
-
-import streamlit as st
-import yfinance as yf
-
-def display_options_sentiment(ticker_symbol):
-    st.subheader(f"Total Market Sentiment: {ticker_symbol}")
-    ticker = yf.Ticker(ticker_symbol)
-    
-    try:
-        # 1. Get all available expiration dates
-        expirations = ticker.options
-        
-        if not expirations:
-            st.warning(f"No options found for {ticker_symbol}")
-            return
-
-        total_calls_vol = 0
-        total_puts_vol = 0
-        
-        # 2. Loop through the first 5 expirations and sum volumes
-        # This gives a "Daily Total" across the most active dates
-        for exp in expirations[:5]:
-            opt = ticker.option_chain(exp)
-            total_calls_vol += opt.calls['volume'].sum()
-            total_puts_vol += opt.puts['volume'].sum()
-        
-        # 3. Calculate the aggregated Put/Call Ratio
-        vol_pcr = total_puts_vol / total_calls_vol if total_calls_vol > 0 else 0
-        
-        # 4. Display results
-        col1, col2 = st.columns(2)
-        col1.metric("Total Volume PCR", f"{vol_pcr:.2f}", help="Sum of daily volume across the next 5 expiration dates.")
-        
-        if vol_pcr < 0.7:
-            col2.success("Sentiment: Strongly Bullish")
-        elif vol_pcr > 1.1:
-            col2.error("Sentiment: Strongly Bearish")
-        else:
-            col2.info("Sentiment: Neutral / Balanced")
-            
-    except Exception as e:
-        st.error(f"Error fetching aggregated data: {e}")
-
-def display_options_sentiment(ticker_symbol):
-    st.subheader(f"Total Market Sentiment: {ticker_symbol}")
-    ticker = yf.Ticker(ticker_symbol)
-    
-    try:
-        expirations = ticker.options
-        if not expirations:
-            st.warning(f"No options found for {ticker_symbol}")
-            return
-
-        total_calls_vol = 0
-        total_puts_vol = 0
-        
-        # Aggregating data from the first 5 expiration dates
-        for exp in expirations[:5]:
-            opt = ticker.option_chain(exp)
-            total_calls_vol += opt.calls['volume'].sum()
-            total_puts_vol += opt.puts['volume'].sum()
-        
-        vol_pcr = total_puts_vol / total_calls_vol if total_calls_vol > 0 else 0
-        
-        # UI Layout: Metrics on top, Chart below
-        col1, col2 = st.columns(2)
-        col1.metric("Aggregated PCR", f"{vol_pcr:.2f}")
-        
-        if vol_pcr < 0.7:
-            col2.success("Sentiment: Strongly Bullish")
-        elif vol_pcr > 1.1:
-            col2.error("Sentiment: Strongly Bearish")
-        else:
-            col2.info("Sentiment: Neutral / Balanced")
-
-        # Create the Pie Chart
-        df_pie = pd.DataFrame({
-            "Type": ["Calls", "Puts"],
-            "Volume": [total_calls_vol, total_puts_vol]
-        })
-        
-        fig = px.pie(
-            df_pie, 
-            values='Volume', 
-            names='Type', 
-            title=f"Call vs Put Volume (Next 5 Expirations)",
-            color='Type',
-            color_discrete_map={'Calls': '#00ff00', 'Puts': '#ff0000'} # Green for Calls, Red for Puts
-        )
-        
-        st.plotly_chart(fig, use_container_width=True)
-            
-    except Exception as e:
-        st.error(f"Error fetching data: {e}")
-
+    st.caption("Data via yfinance • Refreshes every 5 minutes • Low-liquidity contracts zero-filled")
