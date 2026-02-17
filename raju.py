@@ -15,7 +15,7 @@ def check_password():
     """Returns True if the user had the correct password."""
     def password_entered():
         # Change 'your_secret_password' to whatever you want
-        if st.session_state["password"] == "your_secret_password":
+        if st.session_state["password"] == "Pratimap9!@":
             st.session_state["password_correct"] = True
             del st.session_state["password"]  # clean up
         else:
