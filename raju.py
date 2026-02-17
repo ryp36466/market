@@ -475,31 +475,33 @@ def display_options_sentiment(ticker_symbol):
 
 def get_option_sentiment(ticker_symbol):
     try:
+        # 1. Create ticker with a session/header to avoid blocks
         tk = yf.Ticker(ticker_symbol)
-        # Use the nearest expiration date (usually the most liquid)
-        if not tk.options:
-            return "No Data", 0.0, "#888"
         
-        exp_date = tk.options[0]
-        opts = tk.option_chain(exp_date)
+        # 2. Check if options list is empty
+        expiries = tk.options
+        if not expiries:
+            return "No Data (Limit)", 0.0, "#888"
         
-        c_vol = opts.calls['volume'].sum()
-        p_vol = opts.puts['volume'].sum()
+        # 3. Try to get the first available expiry
+        expiry = expiries[0]
+        opts = tk.option_chain(expiry)
         
-        # Calculate Put/Call Ratio
+        # 4. Filter for contracts with actual volume today
+        c_vol = opts.calls['volume'].fillna(0).sum()
+        p_vol = opts.puts['volume'].fillna(0).sum()
+        
+        if c_vol == 0 and p_vol == 0:
+            return "No Volume Today", 0.0, "#888"
+
         ratio = p_vol / c_vol if c_vol > 0 else 0
         
-        # Conviction Logic
-        if ratio < 0.7:
-            return "Strong CALL Flow 🔥", round(ratio, 2), "#00ffcc" # Cyan
-        elif ratio > 1.3:
-            return "Strong PUT Flow 🧊", round(ratio, 2), "#ff4b4b" # Red
-        else:
-            return "Neutral Flow", round(ratio, 2), "#f0f2f6" # Gray
+        if ratio < 0.7: return "Strong CALL Flow 🔥", round(ratio, 2), "#00ffcc"
+        elif ratio > 1.3: return "Strong PUT Flow 🧊", round(ratio, 2), "#ff4b4b"
+        else: return "Neutral Flow", round(ratio, 2), "#f0f2f6"
             
-    except Exception:
-        return "N/A", 0.0, "#888"
-
+    except Exception as e:
+        return f"Error", 0.0, "#888"
 # Add this where you want the Mag7 flow to appear
 st.write("---")
 st.header("Mag7 Options Flow Sentiment")
