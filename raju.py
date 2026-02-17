@@ -499,3 +499,23 @@ def get_option_sentiment(ticker_symbol):
             
     except Exception:
         return "N/A", 0.0, "#888"
+
+# Add this where you want the Mag7 flow to appear
+st.write("---")
+st.header("Mag7 Options Flow Sentiment")
+
+for ticker in MAG7_TICKERS:
+    sentiment, ratio, color = get_option_sentiment(ticker)
+    
+    # This creates the clean row layout from your previous goal
+    st.markdown(
+        f"""
+        <div style="display: flex; justify-content: space-between; align-items: center; 
+                    padding: 10px; border-bottom: 1px solid #333; background-color: #1e1e1e; border-radius: 5px; margin-bottom: 5px;">
+            <span style="font-weight: bold; width: 80px;">{ticker}</span>
+            <span style="color: {color}; font-weight: bold;">{sentiment}</span>
+            <span style="color: #888;">P/C Ratio: {ratio}</span>
+        </div>
+        """, 
+        unsafe_allow_html=True
+    )
