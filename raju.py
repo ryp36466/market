@@ -62,6 +62,14 @@ MAG7_TICKERS = {
     "Tesla (TSLA)": "TSLA"
 }
 
+# ── NEW: OPTIONS SENTIMENT TICKERS (Mag7 + SPY, QQQ, VIX) ──
+OPTIONS_TICKERS = {
+    **MAG7_TICKERS,
+    "SPY (S&P 500 ETF)": "SPY",
+    "QQQ (Nasdaq 100 ETF)": "QQQ",
+    "VIX": "^VIX"
+}
+
 ALL_TICKERS = {**GLOBAL_TICKERS, **SECTOR_TICKERS, **ETF_TICKERS, **TWENTYFOUR_TICKERS, **MAG7_TICKERS}
 
 # ── SENTIMENT ANALYSIS ──
@@ -307,7 +315,7 @@ tab1, tab2, tab3, tab4 = st.tabs([
     "🌎 Global Indices",
     "📈 Sectors, ETFs, 24h & Mag7",
     "📊 Relative Strength & Charts",
-    "⚖️ Mag7 Options Sentiment"
+    "⚖️ Options Sentiment (Mag7 + SPY/QQQ/VIX)"
 ])
 
 with tab1:
@@ -373,17 +381,17 @@ with tab3:
             st.line_chart(data['Close'], use_container_width=True)
 
 with tab4:
-    st.subheader("Magnificent 7 Options Sentiment (Put/Call Volume Ratio)")
+    st.subheader("Options Sentiment (Put/Call Volume Ratio)")
     st.caption(
         "Aggregated from nearest 5 expirations • "
         "PCR = Put Volume / Call Volume • >1.0 → bearish tilt • <0.8 → bullish tilt • "
-        "Today's traded volume only"
+        "Today's traded volume only • SPY, QQQ & VIX added"
     )
 
-    @st.cache_data(ttl=300, show_spinner="Fetching Mag7 options chains...")
-    def get_mag7_pcr():
+    @st.cache_data(ttl=300, show_spinner="Fetching options chains...")
+    def get_options_pcr():
         results = {}
-        for label, symbol in MAG7_TICKERS.items():
+        for label, symbol in OPTIONS_TICKERS.items():
             try:
                 ticker = yf.Ticker(symbol)
                 expirations = ticker.options
@@ -417,11 +425,12 @@ with tab4:
                 results[label] = {"error": str(e)}
         return results
 
-    data = get_mag7_pcr()
+    data = get_options_pcr()
 
-    cols = st.columns(4)
+    # 5-column layout for 10 assets
+    cols = st.columns(5)
     for i, (label, info) in enumerate(data.items()):
-        col = cols[i % 4]
+        col = cols[i % 5]
         if "error" in info:
             col.error(f"{label}\n{info['error']}")
             continue
@@ -441,12 +450,12 @@ with tab4:
     agg_pcr = total_put / total_call if total_call > 0 else 0.0
 
     col1, col2 = st.columns([1, 3])
-    col1.metric("Mag7 Aggregate PCR", f"{agg_pcr:.2f}")
+    col1.metric("Aggregate PCR (All 10)", f"{agg_pcr:.2f}")
     if agg_pcr < 0.80:
-        col2.success("**Overall bullish options flow** across Mag7")
+        col2.success("**Overall bullish options flow** across Mag7 + SPY/QQQ/VIX")
     elif agg_pcr > 1.10:
-        col2.error("**Overall bearish options flow** across Mag7")
+        col2.error("**Overall bearish options flow** across Mag7 + SPY/QQQ/VIX")
     else:
-        col2.info("**Balanced options sentiment** across Mag7")
+        col2.info("**Balanced options sentiment** across Mag7 + SPY/QQQ/VIX")
 
-    st.caption("Data via yfinance • Refreshes every 5 minutes • Low-liquidity contracts zero-filled")
+    st.caption("Data via yfinance • Refreshes every 5 minutes • Low-liquidity contracts zero-filled • VIX follows same PCR logic (high PCR = higher vol expected = bearish market tilt)")
