@@ -474,45 +474,46 @@ def display_options_sentiment(ticker_symbol):
     except Exception as e:
         st.error(f"Error fetching data: {e}")
 
+import yfinance as yf
 import requests
-from bs4 import BeautifulSoup
 
+# This helps bypass the "Barchart Busy" / "No Data" blocks
 def get_option_sentiment(ticker_symbol):
     try:
-        # Barchart search URL
-        url = f"https://www.barchart.com/stocks/quotes/{ticker_symbol}/options-summary"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
-        }
+        # 1. Setup a clean session
+        session = requests.Session()
+        session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        })
         
-        response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code != 200:
-            return "Barchart Busy", 0.0, "#888"
-
-        # Look for the Put/Call Vol Ratio in the HTML
-        soup = BeautifulSoup(response.text, 'html.parser')
+        tk = yf.Ticker(ticker_symbol, session=session)
         
-        # Barchart often stores these in a specific list or table
-        # This is a robust way to find the ratio text on the page
-        ratio = 0.0
-        if "Put/Call Vol Ratio" in response.text:
-            import re
-            match = re.search(r'Put/Call Vol Ratio:[^0-9.]+([0-9.]+)', response.text)
-            if match:
-                ratio = float(match.group(1))
-
-        if ratio == 0.0:
-            return "No Data", 0.0, "#888"
-            
+        # 2. Get the closest expiry
+        expiries = tk.options
+        if not expiries:
+            return "No Options List", 0.0, "#888"
+        
+        # 3. Fetch the chain for the front month/week
+        chain = tk.option_chain(expiries[0])
+        
+        # 4. Calculate Volumes
+        c_vol = chain.calls['volume'].fillna(0).sum()
+        p_vol = chain.puts['volume'].fillna(0).sum()
+        
+        if c_vol == 0: return "Low Vol", 0.0, "#888"
+        
+        ratio = p_vol / c_vol
+        
+        # 5. Sentiment Logic
         if ratio < 0.7:
-            return "Strong CALL Flow 🔥", ratio, "#00ffcc"
+            return "Strong CALL Flow 🔥", round(ratio, 2), "#00ffcc"
         elif ratio > 1.3:
-            return "Strong PUT Flow 🧊", ratio, "#ff4b4b"
+            return "Strong PUT Flow 🧊", round(ratio, 2), "#ff4b4b"
         else:
-            return "Neutral Flow", ratio, "#f0f2f6"
+            return "Neutral Flow", round(ratio, 2), "#f0f2f6"
             
     except Exception as e:
-        return "Barchart Error", 0.0, "#888"
+        return "API Limit", 0.0, "#888"
 
 # 3. Main Display Logic
 st.write("---")
