@@ -472,3 +472,30 @@ def display_options_sentiment(ticker_symbol):
             
     except Exception as e:
         st.error(f"Error fetching data: {e}")
+
+def get_option_sentiment(ticker_symbol):
+    try:
+        tk = yf.Ticker(ticker_symbol)
+        # Use the nearest expiration date (usually the most liquid)
+        if not tk.options:
+            return "No Data", 0.0, "#888"
+        
+        exp_date = tk.options[0]
+        opts = tk.option_chain(exp_date)
+        
+        c_vol = opts.calls['volume'].sum()
+        p_vol = opts.puts['volume'].sum()
+        
+        # Calculate Put/Call Ratio
+        ratio = p_vol / c_vol if c_vol > 0 else 0
+        
+        # Conviction Logic
+        if ratio < 0.7:
+            return "Strong CALL Flow 🔥", round(ratio, 2), "#00ffcc" # Cyan
+        elif ratio > 1.3:
+            return "Strong PUT Flow 🧊", round(ratio, 2), "#ff4b4b" # Red
+        else:
+            return "Neutral Flow", round(ratio, 2), "#f0f2f6" # Gray
+            
+    except Exception:
+        return "N/A", 0.0, "#888"
