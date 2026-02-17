@@ -473,35 +473,24 @@ def display_options_sentiment(ticker_symbol):
     except Exception as e:
         st.error(f"Error fetching data: {e}")
 
-def get_option_sentiment(ticker_symbol):
+def get_barchart_flow_stealth(symbol):
     try:
-        # 1. Create ticker with a session/header to avoid blocks
-        tk = yf.Ticker(ticker_symbol)
+        # Barchart requires specific headers to look like a browser
+        url = f"https://www.barchart.com/stocks/quotes/{symbol}/options"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+            "Referer": "https://www.barchart.com"
+        }
         
-        # 2. Check if options list is empty
-        expiries = tk.options
-        if not expiries:
-            return "No Data (Limit)", 0.0, "#888"
+        # Note: Barchart often uses a 'CSRF token'. 
+        # For a simple Streamlit app, using 'requests' usually works if the session is active.
+        response = requests.get(url, headers=headers, timeout=10)
         
-        # 3. Try to get the first available expiry
-        expiry = expiries[0]
-        opts = tk.option_chain(expiry)
-        
-        # 4. Filter for contracts with actual volume today
-        c_vol = opts.calls['volume'].fillna(0).sum()
-        p_vol = opts.puts['volume'].fillna(0).sum()
-        
-        if c_vol == 0 and p_vol == 0:
-            return "No Volume Today", 0.0, "#888"
-
-        ratio = p_vol / c_vol if c_vol > 0 else 0
-        
-        if ratio < 0.7: return "Strong CALL Flow 🔥", round(ratio, 2), "#00ffcc"
-        elif ratio > 1.3: return "Strong PUT Flow 🧊", round(ratio, 2), "#ff4b4b"
-        else: return "Neutral Flow", round(ratio, 2), "#f0f2f6"
-            
-    except Exception as e:
-        return f"Error", 0.0, "#888"
+        # This is a simplified proxy. For actual scraping, 
+        # you would need to parse the 'getOptions' JSON endpoint Barchart uses internally.
+        # IF THIS FEELS TOO COMPLEX: Stick to the yfinance fix below.
+    except:
+        return "Connection Error", 0.0, "#888"
 # Add this where you want the Mag7 flow to appear
 st.write("---")
 st.header("Mag7 Options Flow Sentiment")
