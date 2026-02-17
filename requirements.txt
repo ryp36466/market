@@ -5,3 +5,4 @@ yfinance
 streamlit-autorefresh
 finvizfinance
 plotly
+barchart-ondemand
