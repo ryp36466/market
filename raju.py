@@ -473,40 +473,50 @@ def display_options_sentiment(ticker_symbol):
     except Exception as e:
         st.error(f"Error fetching data: {e}")
 
-def get_barchart_flow_stealth(symbol):
+import requests
+
+# 1. Create a session to bypass blocks
+session = requests.Session()
+session.headers.update({
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+})
+
+# 2. Define the function correctly
+def get_option_sentiment(ticker_symbol):
     try:
-        # Barchart requires specific headers to look like a browser
-        url = f"https://www.barchart.com/stocks/quotes/{symbol}/options"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-            "Referer": "https://www.barchart.com"
-        }
+        tk = yf.Ticker(ticker_symbol, session=session)
+        if not tk.options:
+            return "No Options", 0.0, "#888"
         
-        # Note: Barchart often uses a 'CSRF token'. 
-        # For a simple Streamlit app, using 'requests' usually works if the session is active.
-        response = requests.get(url, headers=headers, timeout=10)
+        # Get nearest expiry
+        opts = tk.option_chain(tk.options[0])
+        c_vol = opts.calls['volume'].fillna(0).sum()
+        p_vol = opts.puts['volume'].fillna(0).sum()
         
-        # This is a simplified proxy. For actual scraping, 
-        # you would need to parse the 'getOptions' JSON endpoint Barchart uses internally.
-        # IF THIS FEELS TOO COMPLEX: Stick to the yfinance fix below.
+        if c_vol == 0 and p_vol == 0:
+            return "No Vol Today", 0.0, "#888"
+
+        ratio = p_vol / c_vol if c_vol > 0 else 0
+        
+        if ratio < 0.7: return "Strong CALL Flow 🔥", round(ratio, 2), "#00ffcc"
+        elif ratio > 1.3: return "Strong PUT Flow 🧊", round(ratio, 2), "#ff4b4b"
+        return "Neutral Flow", round(ratio, 2), "#f0f2f6"
     except:
-        return "Connection Error", 0.0, "#888"
-# Add this where you want the Mag7 flow to appear
+        return "Data Error", 0.0, "#888"
+
+# 3. Main Display Logic
 st.write("---")
 st.header("Mag7 Options Flow Sentiment")
 
-for ticker in MAG7_TICKERS:
+# Using the dictionary keys from your GLOBAL_TICKERS or defining manually
+MAG7_LIST = ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "TSLA", "NVDA"]
+
+for ticker in MAG7_LIST:
     sentiment, ratio, color = get_option_sentiment(ticker)
-    
-    # This creates the clean row layout from your previous goal
-    st.markdown(
-        f"""
-        <div style="display: flex; justify-content: space-between; align-items: center; 
-                    padding: 10px; border-bottom: 1px solid #333; background-color: #1e1e1e; border-radius: 5px; margin-bottom: 5px;">
+    st.markdown(f"""
+        <div style="display: flex; justify-content: space-between; padding: 10px; border-bottom: 1px solid #333; background-color: #1e1e1e; border-radius: 5px; margin-bottom: 5px;">
             <span style="font-weight: bold; width: 80px;">{ticker}</span>
             <span style="color: {color}; font-weight: bold;">{sentiment}</span>
-            <span style="color: #888;">P/C Ratio: {ratio}</span>
+            <span style="color: {color};">P/C Ratio: {ratio}</span>
         </div>
-        """, 
-        unsafe_allow_html=True
-    )
+    """, unsafe_allow_html=True)
