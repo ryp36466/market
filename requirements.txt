@@ -5,4 +5,5 @@ yfinance
 streamlit-autorefresh
 finvizfinance
 plotly
-barchart-ondemand
+requests
+beautifulsoup4
