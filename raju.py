@@ -475,46 +475,44 @@ def display_options_sentiment(ticker_symbol):
         st.error(f"Error fetching data: {e}")
 
 import requests
-
-# 1. Create a session to bypass blocks
-session = requests.Session()
-session.headers.update({
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Referer": "https://www.barchart.com"
-})
+from bs4 import BeautifulSoup
 
 def get_option_sentiment(ticker_symbol):
     try:
-        # Barchart's public options overview URL
+        # Barchart search URL
         url = f"https://www.barchart.com/stocks/quotes/{ticker_symbol}/options-summary"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+        }
         
-        # Initial request to get necessary cookies
-        session.get("https://www.barchart.com", timeout=10)
-        response = session.get(url, timeout=10)
-        
+        response = requests.get(url, headers=headers, timeout=10)
         if response.status_code != 200:
-            return "Barchart Blocked", 0.0, "#888"
+            return "Barchart Busy", 0.0, "#888"
 
-        # Search for the Put/Call Ratio in the page text
-        # Barchart usually displays "Put/Call Vol Ratio: 0.XX"
-        if "Put/Call Vol Ratio" in response.text:
-            start_index = response.text.find("Put/Call Vol Ratio") + 19
-            ratio_text = response.text[start_index:start_index + 5].strip()
-            # Clean up the string to get just the number
-            ratio = float(''.join(c for c in ratio_text if c.isdigit() or c == '.'))
-            
-            # Sentiment Logic based on Barchart's standard
-            if ratio < 0.7:
-                return "Strong CALL Flow 🔥", ratio, "#00ffcc"
-            elif ratio > 1.3:
-                return "Strong PUT Flow 🧊", ratio, "#ff4b4b"
-            else:
-                return "Neutral Flow", ratio, "#f0f2f6"
+        # Look for the Put/Call Vol Ratio in the HTML
+        soup = BeautifulSoup(response.text, 'html.parser')
         
-        return "No Ratio Found", 0.0, "#888"
+        # Barchart often stores these in a specific list or table
+        # This is a robust way to find the ratio text on the page
+        ratio = 0.0
+        if "Put/Call Vol Ratio" in response.text:
+            import re
+            match = re.search(r'Put/Call Vol Ratio:[^0-9.]+([0-9.]+)', response.text)
+            if match:
+                ratio = float(match.group(1))
 
+        if ratio == 0.0:
+            return "No Data", 0.0, "#888"
+            
+        if ratio < 0.7:
+            return "Strong CALL Flow 🔥", ratio, "#00ffcc"
+        elif ratio > 1.3:
+            return "Strong PUT Flow 🧊", ratio, "#ff4b4b"
+        else:
+            return "Neutral Flow", ratio, "#f0f2f6"
+            
     except Exception as e:
-        return f"Scrape Error", 0.0, "#888"
+        return "Barchart Error", 0.0, "#888"
 
 # 3. Main Display Logic
 st.write("---")
