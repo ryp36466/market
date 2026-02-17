@@ -323,7 +323,7 @@ with col_b:
 
 st.divider()
 
-tab1, tab2, tab3 = st.tabs(["🌎 Global Indices", "📈 Sectors, ETFs, 24h & Mag7", "📊 Relative Strength & Charts"])
+tab1, tab2, tab3 = st.tabs(["🌎 Global Indices", "📈 Sectors, ETFs, 24h & Mag7", "📊 Relative Strength & Charts","⚖️ Mag7 Options Sentiment"])
 
 with tab1:
     st.subheader("Major Markets & Indices")
@@ -379,6 +379,129 @@ with tab3:
             data.index = data.index.tz_convert('US/Eastern')
             st.write(f"**{label}**")
             st.line_chart(data['Close'], use_container_width=True)
+
+with tab4:
+    st.subheader("Magnificent 7 Options Sentiment")
+    st.caption("Aggregated Put/Call Volume & OI from nearest 5 expirations • Live via Yahoo Finance • Green = bullish tilt, Red = bearish")
+    st.markdown("Higher **Volume PCR** (>1) suggests bearish pressure from put buying / call selling. Lower (<0.8) = bullish call dominance.")
+
+    # We'll compute for all Mag7 in one go — use columns for visual comparison
+    mag7_list = list(MAG7_TICKERS.keys())  # e.g. ["Apple (AAPL)", ...]
+    mag7_symbols = list(MAG7_TICKERS.values())  # ["AAPL", "MSFT", ...]
+
+    # Cache the heavy lifting (options fetch can be slow for 7 tickers)
+    @st.cache_data(ttl=300)  # refresh every 5 min
+    def fetch_mag7_options_sentiment():
+        results = {}
+        for label, symbol in MAG7_TICKERS.items():
+            try:
+                ticker = yf.Ticker(symbol)
+                expirations = ticker.options
+                if not expirations:
+                    results[label] = {"error": "No options data"}
+                    continue
+
+                total_calls_vol = 0
+                total_puts_vol = 0
+                total_calls_oi = 0
+                total_puts_oi = 0
+
+                for exp in expirations[:5]:  # nearest 5 = most active/relevant
+                    opt = ticker.option_chain(exp)
+                    total_calls_vol += opt.calls['volume'].fillna(0).sum()
+                    total_puts_vol += opt.puts['volume'].fillna(0).sum()
+                    total_calls_oi += opt.calls['openInterest'].fillna(0).sum()
+                    total_puts_oi += opt.puts['openInterest'].fillna(0).sum()
+
+                vol_pcr = total_puts_vol / total_calls_vol if total_calls_vol > 0 else 0
+                oi_pcr = total_puts_oi / total_calls_oi if total_calls_oi > 0 else 0
+                total_vol = total_calls_vol + total_puts_vol
+
+                sentiment = "Strongly Bullish" if vol_pcr < 0.75 else \
+                            "Bullish" if vol_pcr < 0.9 else \
+                            "Neutral" if vol_pcr < 1.1 else \
+                            "Bearish" if vol_pcr < 1.3 else "Strongly Bearish"
+
+                results[label] = {
+                    "vol_pcr": vol_pcr,
+                    "oi_pcr": oi_pcr,
+                    "call_vol": total_calls_vol,
+                    "put_vol": total_puts_vol,
+                    "total_vol": total_vol,
+                    "sentiment": sentiment,
+                    "error": None
+                }
+            except Exception as e:
+                results[label] = {"error": str(e)}
+        return results
+
+    with st.spinner("Fetching Mag7 options chains... (may take 10-20s)"):
+        sentiment_data = fetch_mag7_options_sentiment()
+
+    # Display in a nice grid (3 columns for 7 items)
+    cols = st.columns(3)
+    for i, label in enumerate(mag7_list):
+        col = cols[i % 3]
+        data = sentiment_data.get(label, {"error": "No data"})
+
+        if "error" in data and data["error"]:
+            col.error(f"{label}: {data['error']}")
+            continue
+
+        vol_pcr = data["vol_pcr"]
+        sentiment = data["sentiment"]
+
+        # Metric + colored background
+        delta_color = "normal"
+        if "Bullish" in sentiment:
+            delta_color = "normal"  # or custom if you want green
+        elif "Bearish" in sentiment:
+            delta_color = "inverse"
+
+        col.metric(
+            label=f"{label} PCR (Vol)",
+            value=f"{vol_pcr:.2f}",
+            delta=sentiment,
+            delta_color=delta_color,
+            help=f"Vol PCR: {data['put_vol']:.0f} puts / {data['call_vol']:.0f} calls\nOI PCR: {data['oi_pcr']:.2f}"
+        )
+
+        # Small pie per stock (optional — can be heavy, so expander)
+        if data["total_vol"] > 500:  # only show if decent liquidity
+            with col.expander("Call/Put Breakdown"):
+                df_pie = pd.DataFrame({
+                    "Type": ["Calls", "Puts"],
+                    "Volume": [data["call_vol"], data["put_vol"]]
+                })
+                fig = px.pie(
+                    df_pie,
+                    values="Volume",
+                    names="Type",
+                    color="Type",
+                    color_discrete_map={'Calls': '#22c55e', 'Puts': '#ef4444'},
+                    title=f"{label} Vol (nearest exp)",
+                    hole=0.5
+                )
+                fig.update_layout(showlegend=False, margin=dict(t=0, b=0, l=0, r=0))
+                col.plotly_chart(fig, use_container_width=True)
+
+    # Overall Mag7 summary
+    st.divider()
+    st.subheader("Mag7 Aggregate Sentiment")
+    total_call_vol = sum(d.get("call_vol", 0) for d in sentiment_data.values() if isinstance(d, dict))
+    total_put_vol = sum(d.get("put_vol", 0) for d in sentiment_data.values() if isinstance(d, dict))
+    agg_vol_pcr = total_put_vol / total_call_vol if total_call_vol > 0 else 0
+
+    col_agg1, col_agg2 = st.columns(2)
+    col_agg1.metric("Group Volume PCR", f"{agg_vol_pcr:.2f}")
+    if agg_vol_pcr < 0.8:
+        col_agg2.success("**Overall Bullish Tilt** across Mag7")
+    elif agg_vol_pcr > 1.1:
+        col_agg2.error("**Overall Bearish Tilt** across Mag7")
+    else:
+        col_agg2.info("**Balanced / Neutral** across Mag7")
+
+    st.caption("Data refreshes every 5 min • Low volume contracts are zero-filled • Use for directional bias, not trading signals.")
 
 import streamlit as st
 import yfinance as yf
