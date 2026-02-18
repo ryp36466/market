@@ -5,9 +5,8 @@ import numpy as np
 from streamlit_autorefresh import st_autorefresh
 import datetime
 import pytz
-import requests
 from finvizfinance.news import News
-import matplotlib.pyplot as plt
+import matplotlib.pyplot asplt
 from scipy.stats import norm
 
 # ========================== PAGE CONFIG ==========================
@@ -80,11 +79,11 @@ MAG7_TICKERS = {
     "Tesla (TSLA)": "TSLA"
 }
 
-OPTIONS_TICKERS = {**MAG7_TICKERS, "SPY (S&P 500 ETF)": "SPY", "QQQ (Nasdaq 100 ETF)": "QQQ", "VIX": "^VIX"}
+OPTIONS_TICKERS = {**MAG7_TICKERS, "SPY (S&P 500 ETF)": "SPY", "QQQ (Nasdaq 100 ETF)": "QQQ"}
 
 TIER_1_BANKS = [
     "Goldman Sachs", "Morgan Stanley", "JPMorgan Chase", "JP Morgan",
-    "Bank of America", "BofA", "Citigroup", "Barclays", "UBS",
+    "Bank of America", "Citigroup", "Barclays", "UBS",
     "Wells Fargo", "Deutsche Bank", "Credit Suisse"
 ]
 
@@ -211,14 +210,10 @@ def get_options_pcr():
             res[label] = {"error": str(e)}
     return res
 
-# ========================== GEX DATA ==========================
+# ========================== GEX DATA (FIXED: No custom session) ==========================
 @st.cache_data(ttl=600)
 def get_gex_data(symbol):
-    session = requests.Session()
-    session.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    })
-    tk = yf.Ticker(symbol, session=session)
+    tk = yf.Ticker(symbol)  # Let yfinance handle the session internally (uses curl_cffi)
     hist = tk.history(period="1d")
     if hist.empty:
         return None, None, None
@@ -267,7 +262,7 @@ time_now = datetime.datetime.now(est).strftime('%H:%M:%S')
 full_market = fetch_all_market_data().dropna(subset=['Change %'])
 
 global_df = full_market[full_market['Asset'].isin(GLOBAL_TICKERS.keys())].copy()
-sector_df = full_market[full_market['Asset'].isin(SECTOR_TICKERS.keys())].copy()
+sector_df = full_market[fullUpdate_market[full_market['Asset'].isin(SECTOR_TICKERS.keys())].copy()
 etf_df = full_market[full_market['Asset'].isin(ETF_TICKERS.keys())].copy()
 tf_df = full_market[full_market['Asset'].isin(TWENTYFOUR_TICKERS.keys())].copy()
 mag7_df = full_market[full_market['Asset'].isin(MAG7_TICKERS.keys())].copy()
@@ -422,57 +417,67 @@ with tab5:
         if not ratings_df.empty:
             target_cols = [c for c in ['Target Price', 'Price Target', 'New Target'] if c in ratings_df.columns]
             display_cols = ['Symbol', 'Firm', 'To Grade'] + target_cols + ['Action']
-            st.dataframe(ratings_df[display_cols].sort_values('Date', ascending=False).head(20),
+            st.dataframe(ratings_df[display_cols].sort_values(by='Date', ascending=False).head(20),
                          use_container_width=True, hide_index=True)
         else:
             st.info("No Tier 1 analyst changes detected.")
 
 with tab6:
     st.subheader("Gamma Exposure (GEX) Profile")
-    gex_ticker = st.selectbox("Select Ticker for GEX", ["SPY", "QQQ", "NVDA", "AAPL", "TSLA", "MSFT", "AMZN"])
+    gex_options = ["SPY", "QQQ", "NVDA", "AAPL", "TSLA", "MSFT", "AMZN", "META", "GOOGL"]
+    gex_ticker = st.selectbox("Select Ticker for GEX", gex_options, index=0)
     
     with st.spinner(f"Calculating GEX for {gex_ticker}..."):
         tk, spot, expirations = get_gex_data(gex_ticker)
         
         if tk and expirations:
             all_opts = []
-            for exp in expirations[:3]:
-                chain = tk.option_chain(exp)
-                calls, puts = chain.calls, chain.puts
-                calls['type'], puts['type'] = 'call', 'put'
-                calls['exp'], puts['exp'] = exp, exp
-                all_opts.append(pd.concat([calls, puts]))
+            for exp in expirations[:3]:  # Nearest 3 expiries
+                try:
+                    chain = tk.option_chain(exp)
+                    calls, puts = chain.calls, chain.puts
+                    calls['type'] = 'call'
+                    puts['type'] = 'put'
+                    calls['exp'] = exp
+                    puts['exp'] = exp
+                    all_opts.append(pd.concat([calls, puts]))
+                except:
+                    continue
             
-            df_gex = pd.concat(all_opts)
-            df_gex['dte'] = (pd.to_datetime(df_gex['exp']) - datetime.datetime.now()).dt.days / 365.0
-            df_gex['dte'] = df_gex['dte'].clip(lower=1/365)
-            
-            df_gex['GEX'] = df_gex.apply(lambda r: calc_gamma(
-                spot, r['strike'], r['dte'], r['impliedVolatility'], 0.04, 0.01, r['type'], r['openInterest']
-            ), axis=1)
-            
-            df_agg = df_gex.groupby('strike')['GEX'].sum() / 1e6
-            
-            fig, ax = plt.subplots(figsize=(12, 5))
-            fig.patch.set_facecolor('#0e1117')
-            ax.set_facecolor('#0e1117')
-            ax.tick_params(colors='white')
-            ax.xaxis.label.set_color('white')
-            ax.yaxis.label.set_color('white')
-            ax.spines['bottom'].set_color('white')
-            ax.spines['top'].set_color('white')
-            ax.spines['left'].set_color('white')
-            ax.spines['right'].set_color('white')
-            
-            ax.bar(df_agg.index, df_agg.values, width=(spot * 0.004), color='#00d4ff', alpha=0.8)
-            ax.axvline(spot, color='#ff4b4b', linestyle='--', linewidth=2, label=f'Spot: {spot:.2f}')
-            ax.set_xlim(spot * 0.93, spot * 1.07)
-            ax.set_ylabel("GEX ($ Millions)", color='white')
-            ax.set_xlabel("Strike Price", color='white')
-            ax.legend(facecolor='#0e1117', labelcolor='white')
-            ax.grid(True, alpha=0.3)
-            st.pyplot(fig)
-            
-            st.info("💡 **Gamma Exposure** estimates dealer hedging pressure. Positive GEX = support on dips, negative = pressure on rallies. Large bars often act as magnets/support/resistance.")
+            if not all_opts:
+                st.error("No options data available for the selected expirations.")
+            else:
+                df_gex = pd.concat(all_opts)
+                df_gex['dte'] = (pd.to_datetime(df_gex['exp']) - datetime.datetime.now()).dt.days / 365.0
+                df_gex['dte'] = df_gex['dte'].clip(lower=1/365)
+                
+                df_gex['GEX'] = df_gex.apply(lambda r: calc_gamma(
+                    spot, r['strike'], r['dte'], r['impliedVolatility'], 0.04, 0.01, r['type'], r['openInterest']
+                ), axis=1)
+                
+                df_agg = df_gex.groupby('strike')['GEX'].sum() / 1e6
+                
+                fig, ax = plt.subplots(figsize=(12, 5))
+                fig.patch.set_facecolor('#0e1117')
+                ax.set_facecolor('#0e1117')
+                ax.tick_params(colors='white')
+                ax.xaxis.label.set_color('white')
+                ax.yaxis.label.set_color('white')
+                ax.spines['bottom'].set_color('white')
+                ax.spines['top'].set_color('white')
+                ax.spines['left'].set_color('white')
+                ax.spines['right'].set_color('white')
+                
+                bar_width = spot * 0.004
+                ax.bar(df_agg.index, df_agg.values, width=bar_width, color='#00d4ff', alpha=0.8)
+                ax.axvline(spot, color='#ff4b4b', linestyle='--', linewidth=2, label=f'Spot: {spot:.2f}')
+                ax.set_xlim(spot * 0.93, spot * 1.07)
+                ax.set_ylabel("GEX ($ Millions)", color='white')
+                ax.set_xlabel("Strike Price", color='white')
+                ax.legend(facecolor='#0e1117', labelcolor='white')
+                ax.grid(True, alpha=0.3)
+                st.pyplot(fig)
+                
+                st.info("💡 **Gamma Exposure** estimates dealer hedging pressure. Positive GEX = potential support on dips, negative = pressure on rallies. Large bars often act as magnets/support/resistance.")
         else:
-            st.error("Could not fetch options data for this ticker.")
+            st.error("Could not fetch options data for this ticker. Try another or refresh.")
