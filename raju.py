@@ -213,19 +213,21 @@ def get_options_pcr():
 # ========================== GEX DATA ==========================
 @st.cache_data(ttl=600)
 def get_gex_data(symbol):
-    # We remove the custom session to avoid the YFDataException
     try:
         tk = yf.Ticker(symbol)
-        # Calling history first often 'wakes up' the ticker object
         hist = tk.history(period="1d")
+        
         if hist.empty:
-            return None, None, None
+            return None, None
+        
         spot = hist['Close'].iloc[-1]
-        return tk, spot, tk.options
+        # We return the list of expirations (strings) instead of the Ticker object
+        expirations = tk.options 
+        
+        return spot, expirations
     except Exception as e:
         st.error(f"GEX Fetch Error: {e}")
-        return None, None, None
-
+        return None, None
 # ========================== STYLING ==========================
 def color_pct(val):
     if pd.isna(val):
