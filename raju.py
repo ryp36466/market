@@ -79,7 +79,6 @@ def fetch_all_market_data():
     ticker_to_label = {v: k for k, v in ALL_TICKERS.items()}
     daily = yf.download(tickers=tickers_list, period="60d", interval="1d", progress=False)
     
-    # Calculate SPY benchmark for Relative Market Volume
     try:
         spy_vol_today = daily['Volume']['SPY'].iloc[-1]
         spy_vol_avg = daily['Volume']['SPY'].iloc[-22:-1].mean()
@@ -106,8 +105,14 @@ def fetch_all_market_data():
 
 @st.cache_data(ttl=300)
 def get_ticker_news(symbol):
-    try: return yf.Ticker(symbol).news[:3]
-    except: return []
+    try:
+        data = yf.Ticker(symbol).news
+        # Handle different response formats from yfinance
+        if isinstance(data, dict) and 'news' in data:
+            return data['news'][:3]
+        return data[:3] if isinstance(data, list) else []
+    except:
+        return []
 
 @st.cache_data(ttl=3600)
 def fetch_earnings_and_ratings(days_window=7):
@@ -179,13 +184,15 @@ with c1:
     st.markdown("**Top Leaders 🚀**")
     for _, r in top_gainers.iterrows():
         news = get_ticker_news(r['Symbol'])
-        sent = analyze_sentiment(news[0]['title']) if news else "⚖️ Neutral"
+        # Safety check for news and title
+        sent = analyze_sentiment(news[0].get('title', '')) if news and len(news) > 0 else "⚖️ Neutral"
         st.write(f"🟢 {r['Asset']}: `{r['Change %']:+.2f}%` {sent} {'🔥' if r['Mkt Rel Vol'] > 1.2 else ''}")
 with c2:
     st.markdown("**Top Laggards 📉**")
     for _, r in top_losers.iterrows():
         news = get_ticker_news(r['Symbol'])
-        sent = analyze_sentiment(news[0]['title']) if news else "⚖️ Neutral"
+        # Safety check for news and title
+        sent = analyze_sentiment(news[0].get('title', '')) if news and len(news) > 0 else "⚖️ Neutral"
         st.write(f"🔴 {r['Asset']}: `{r['Change %']:+.2f}%` {sent} {'🔥' if r['Mkt Rel Vol'] > 1.2 else ''}")
 with c3:
     up = len(full_market[full_market['Change %'] > 0])
