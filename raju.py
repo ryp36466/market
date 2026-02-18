@@ -95,6 +95,12 @@ OPTIONS_TICKERS = {
     "VIX": "^VIX"
 }
 
+TIER_1_BANKS = [
+    "Goldman Sachs", "Morgan Stanley", "JPMorgan Chase", "JP Morgan", 
+    "Bank of America", "BofA", "Citigroup", "Barclays", "UBS", 
+    "Wells Fargo", "Deutsche Bank", "Credit Suisse"
+]
+
 ALL_TICKERS = {**GLOBAL_TICKERS, **SECTOR_TICKERS, **ETF_TICKERS, **TWENTYFOUR_TICKERS, **MAG7_TICKERS}
 
 # ── SENTIMENT ANALYSIS ──
@@ -340,7 +346,8 @@ tab1, tab2, tab3, tab4 = st.tabs([
     "🌎 Global Indices",
     "📈 Sectors, ETFs, 24h & Mag7",
     "📊 Relative Strength & Charts",
-    "⚖️ Options Sentiment (Mag7 + SPY/QQQ/VIX)"
+    "⚖️ Options Sentiment (Mag7 + SPY/QQQ/VIX)",
+    "🎯 Analyst & Earnings"
 ])
 
 with tab1:
@@ -468,7 +475,27 @@ with tab4:
         )
 
     st.divider()
-
+with tab5:
+    st.subheader("🎯 Market Moving Events")
+    ratings_df, earnings_df = fetch_earnings_and_ratings()
+    
+    col_e, col_r = st.columns(2)
+    
+    with col_e:
+        st.write("**Recent/Upcoming Earnings**")
+        if not earnings_df.empty:
+            st.table(earnings_df)
+        else:
+            st.info("No earnings found for tracked tickers in the 48h window.")
+            
+    with col_r:
+        st.write("**Tier 1 Analyst Moves**")
+        if not ratings_df.empty:
+            # Clean up the dataframe for display
+            display_ratings = ratings_df[['Symbol', 'Firm', 'To Grade', 'From Grade']].tail(10)
+            st.dataframe(display_ratings, use_container_width=True, hide_index=True)
+        else:
+            st.info("No Tier 1 analyst changes detected for tracked tickers today.")
     # Aggregate
     total_call = sum(d.get("call_vol", 0) for d in data.values() if "error" not in d)
     total_put  = sum(d.get("put_vol",  0) for d in data.values() if "error" not in d)
@@ -484,3 +511,51 @@ with tab4:
         col2.info("**Balanced options sentiment** across Mag7 + SPY/QQQ/VIX")
 
     st.caption("Data via yfinance • Refreshes every 5 minutes • Low-liquidity contracts zero-filled • VIX follows same PCR logic (high PCR = higher vol expected = bearish market tilt)")
+
+@st.cache_data(ttl=3600)
+def fetch_earnings_and_ratings():
+    # Note: Fetching this for a broad market is heavy. 
+    # A common approach is to track the Mag7 + top ETFs from your list.
+    earnings_list = []
+    ratings_list = []
+    
+    # We'll check our existing ALL_TICKERS for upgrades/earnings
+    for label, symbol in ALL_TICKERS.items():
+        try:
+            ticker = yf.Ticker(symbol)
+            
+            # 1. Analyst Upgrades/Downgrades
+            recs = ticker.recommendations
+            if recs is not None and not recs.empty:
+                # Get the last 5 recommendations
+                latest = recs.tail(5).copy()
+                latest['Symbol'] = symbol
+                # Filter for Tier 1
+                latest = latest[latest['Firm'].str.contains('|'.join(TIER_1_BANKS), case=False, na=False)]
+                ratings_list.append(latest)
+
+            # 2. Earnings (Today/Yesterday)
+            cal = ticker.calendar
+            if cal is not None and 'Earnings Date' in cal:
+                e_date = cal['Earnings Date'][0].date()
+                today = datetime.date.today()
+                yesterday = today - datetime.timedelta(days=1)
+                
+                if e_date == today or e_date == yesterday:
+                    # Get news for sentiment
+                    news = ticker.news[:3]
+                    sent = "⚖️ Neutral"
+                    if news:
+                        sentiments = [analyze_sentiment(n.get('title', '')) for n in news]
+                        sent = max(set(sentiments), key=sentiments.count)
+                    
+                    earnings_list.append({
+                        "Asset": label,
+                        "Symbol": symbol,
+                        "Date": e_date,
+                        "Sentiment": sent
+                    })
+        except:
+            continue
+            
+    return (pd.concat(ratings_list) if ratings_list else pd.DataFrame()), pd.DataFrame(earnings_list)
