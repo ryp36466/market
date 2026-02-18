@@ -213,19 +213,18 @@ def get_options_pcr():
 # ========================== GEX DATA ==========================
 @st.cache_data(ttl=600)
 def get_gex_data(symbol):
-    import requests
-    # Create a session to prevent Rate Limit Errors
-    session = requests.Session()
-    session.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    })
-    
-    tk = yf.Ticker(symbol, session=session)
-    hist = tk.history(period="1d")
-    if hist.empty:
+    # We remove the custom session to avoid the YFDataException
+    try:
+        tk = yf.Ticker(symbol)
+        # Calling history first often 'wakes up' the ticker object
+        hist = tk.history(period="1d")
+        if hist.empty:
+            return None, None, None
+        spot = hist['Close'].iloc[-1]
+        return tk, spot, tk.options
+    except Exception as e:
+        st.error(f"GEX Fetch Error: {e}")
         return None, None, None
-    spot = hist['Close'].iloc[-1]
-    return tk, spot, tk.options
 
 # ========================== STYLING ==========================
 def color_pct(val):
