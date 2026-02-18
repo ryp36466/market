@@ -472,22 +472,25 @@ with tab6:
                     # --- CALCULATIONS ---
                  # --- CALCULATIONS (FILTERED FOR ACCURACY) ---
 # Only look for the Flip Level within 10% of the current price
-                df_near_price = df_agg[(df_agg.index > spot * 0.90) & (df_agg.index < spot * 1.10)]
-
+               # --- CALCULATIONS (FILTERED FOR ACCURACY) ---
+                # This ensures the flip level stays near the actual price
+                df_near_price = df_agg[(df_agg.index > spot * 0.85) & (df_agg.index < spot * 1.15)]
+                
                 if not df_near_price.empty:
-                  gamma_flip = df_near_price.index[np.abs(df_near_price.values).argmin()]
+                    gamma_flip = df_near_price.index[np.abs(df_near_price.values).argmin()]
                 else:
                     gamma_flip = df_agg.index[np.abs(df_agg.values).argmin()]
-
+                
                 total_gex = df_agg.sum()
                 resistance = df_agg.idxmax()
                 support = df_agg.idxmin()
-                    # --- SUMMARY METRICS ---
-                    m1, m2, m3 = st.columns(3)
-                    m1.metric("Current Spot", f"{spot:.2f}")
-                    m2.metric("Gamma Flip Level", f"{gamma_flip:.2f}", 
-                              delta=f"{spot - gamma_flip:.2f} from Spot", delta_color="inverse")
-                    m3.metric("Total Net GEX", f"${total_gex:,.1f}M")
+
+                # --- SUMMARY METRICS ---
+                m1, m2, m3 = st.columns(3)
+                m1.metric("Current Spot", f"{spot:.2f}")
+                m2.metric("Gamma Flip Level", f"{gamma_flip:.2f}", 
+                          delta=f"{spot - gamma_flip:.2f} from Spot", delta_color="normal")
+                m3.metric("Total Net GEX", f"${total_gex:,.1f}M")
 
                     # --- CHARTING ---
                     fig, ax = plt.subplots(figsize=(12, 6))
