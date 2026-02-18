@@ -470,11 +470,18 @@ with tab6:
                     df_agg = df_gex.groupby('strike')['GEX'].sum() / 1e6
                     
                     # --- CALCULATIONS ---
-                    gamma_flip = df_agg.index[np.abs(df_agg.values).argmin()]
-                    total_gex = df_agg.sum()
-                    resistance = df_agg.idxmax()
-                    support = df_agg.idxmin()
+                 # --- CALCULATIONS (FILTERED FOR ACCURACY) ---
+# Only look for the Flip Level within 10% of the current price
+                df_near_price = df_agg[(df_agg.index > spot * 0.90) & (df_agg.index < spot * 1.10)]
 
+                if not df_near_price.empty:
+                  gamma_flip = df_near_price.index[np.abs(df_near_price.values).argmin()]
+                else:
+                    gamma_flip = df_agg.index[np.abs(df_agg.values).argmin()]
+
+                total_gex = df_agg.sum()
+                resistance = df_agg.idxmax()
+                support = df_agg.idxmin()
                     # --- SUMMARY METRICS ---
                     m1, m2, m3 = st.columns(3)
                     m1.metric("Current Spot", f"{spot:.2f}")
