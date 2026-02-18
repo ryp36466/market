@@ -331,7 +331,14 @@ with c3:
 st.divider()
 @st.cache_data(ttl=600)
 def get_gex_data(symbol):
-    tk = yf.Ticker(symbol)
+    import requests
+    # Create a custom session with a browser-like User-Agent
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    })
+    
+    tk = yf.Ticker(symbol, session=session) # Use the session here
     hist = tk.history(period="1d")
     if hist.empty: 
         return None, None, None
