@@ -213,7 +213,14 @@ def get_options_pcr():
 # ========================== GEX DATA ==========================
 @st.cache_data(ttl=600)
 def get_gex_data(symbol):
-    tk = yf.Ticker(symbol)
+    import requests
+    # Create a session to prevent Rate Limit Errors
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    })
+    
+    tk = yf.Ticker(symbol, session=session)
     hist = tk.history(period="1d")
     if hist.empty:
         return None, None, None
@@ -427,57 +434,57 @@ with tab6:
     gex_options = ["SPY", "QQQ", "NVDA", "AAPL", "TSLA", "MSFT", "AMZN", "META", "GOOGL"]
     gex_ticker = st.selectbox("Select Ticker for GEX", gex_options, index=0)
     
-    with st.spinner(f"Calculating GEX for {gex_ticker}..."):
+    with st.spinner(f"Fetching Live Gamma for {gex_ticker}..."):
         tk, spot, expirations = get_gex_data(gex_ticker)
         
         if tk and expirations:
             all_opts = []
+            # We only pull the first 3 expiries to keep the app fast and avoid more rate limits
             for exp in expirations[:3]:
                 try:
                     chain = tk.option_chain(exp)
-                    calls, puts = chain.calls, chain.puts
-                    calls['type'] = 'call'
-                    puts['type'] = 'put'
-                    calls['exp'] = exp
-                    puts['exp'] = exp
-                    all_opts.append(pd.concat([calls, puts]))
+                    c, p = chain.calls.copy(), chain.puts.copy()
+                    c['type'], p['type'] = 'call', 'put'
+                    c['exp'], p['exp'] = exp, exp
+                    all_opts.append(pd.concat([c, p]))
                 except Exception:
                     continue
             
             if not all_opts:
-                st.error("No options data available for the selected expirations.")
+                st.warning("Yahoo Finance returned no options data for the front-month expirations.")
             else:
                 df_gex = pd.concat(all_opts)
-                df_gex['dte'] = (pd.to_datetime(df_gex['exp']) - datetime.datetime.now()).dt.days / 365.0
+                
+                # Timezone-aware DTE calculation
+                now = pd.Timestamp.now().tz_localize(None)
+                df_gex['dte'] = (pd.to_datetime(df_gex['exp']).dt.tz_localize(None) - now).dt.days / 365.0
                 df_gex['dte'] = df_gex['dte'].clip(lower=1/365)
                 
+                # Calculate GEX using the calc_gamma function defined at the top
                 df_gex['GEX'] = df_gex.apply(lambda r: calc_gamma(
-                    spot, r['strike'], r['dte'], r['impliedVolatility'], 0.04, 0.01, r['type'], r['openInterest']
+                    spot, r['strike'], r['dte'], r['impliedVolatility'], 
+                    0.04, 0.01, r['type'], r['openInterest']
                 ), axis=1)
                 
+                # Aggregate and plot
                 df_agg = df_gex.groupby('strike')['GEX'].sum() / 1e6
                 
                 fig, ax = plt.subplots(figsize=(12, 5))
                 fig.patch.set_facecolor('#0e1117')
                 ax.set_facecolor('#0e1117')
+                
+                # Use absolute value for coloring logic if you want call vs put distinction
+                ax.bar(df_agg.index, df_agg.values, width=(spot * 0.003), color='#00d4ff', alpha=0.7)
+                ax.axvline(spot, color='#ff4b4b', linestyle='--', linewidth=2, label=f'Current Spot: {spot:.2f}')
+                
+                # Filter x-axis to zoom in on the action
+                ax.set_xlim(spot * 0.94, spot * 1.06)
+                ax.set_title(f"{gex_ticker} Total GEX (Net Dealer Positioning)", color='white', size=14)
                 ax.tick_params(colors='white')
-                ax.xaxis.label.set_color('white')
-                ax.yaxis.label.set_color('white')
-                ax.spines['bottom'].set_color('white')
-                ax.spines['top'].set_color('white')
-                ax.spines['left'].set_color('white')
-                ax.spines['right'].set_color('white')
-                
-                bar_width = spot * 0.004
-                ax.bar(df_agg.index, df_agg.values, width=bar_width, color='#00d4ff', alpha=0.8)
-                ax.axvline(spot, color='#ff4b4b', linestyle='--', linewidth=2, label=f'Spot: {spot:.2f}')
-                ax.set_xlim(spot * 0.93, spot * 1.07)
-                ax.set_ylabel("GEX ($ Millions)", color='white')
-                ax.set_xlabel("Strike Price", color='white')
+                ax.grid(True, alpha=0.1)
                 ax.legend(facecolor='#0e1117', labelcolor='white')
-                ax.grid(True, alpha=0.3)
-                st.pyplot(fig)
                 
-                st.info("💡 **Gamma Exposure** estimates dealer hedging pressure. Positive GEX = potential support on dips, negative = pressure on rallies. Large bars often act as magnets/support/resistance.")
+                st.pyplot(fig)
+                st.info("💡 **Gamma Analysis:** Large turquoise bars represent high Open Interest strikes. When the red line (Spot) moves toward a large bar, expect 'stickiness' or hedging volatility.")
         else:
-            st.error("Could not fetch options data for this ticker. Try another or refresh.")
+            st.error("Ticker data unavailable. Please try again in a few minutes.")
