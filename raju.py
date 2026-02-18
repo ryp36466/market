@@ -87,7 +87,7 @@ TIER_1_BANKS = [
     "Wells Fargo", "Deutsche Bank", "Credit Suisse"
 ]
 
-ALL_TICKERS = {**GLOBAL_TICKERS, **VOL_SECTOR_TICKERS, **ETF_TICKERS, **TWENTYFOUR_TICKERS, **MAG7_TICKERS}
+ALL_TICKERS = {**GLOBAL_TICKERS, **SECTOR_TICKERS, **ETF_TICKERS, **TWENTYFOUR_TICKERS, **MAG7_TICKERS}
 
 # ========================== HELPERS ==========================
 def analyze_sentiment(text):
@@ -210,17 +210,24 @@ def get_options_pcr():
             res[label] = {"error": str(e)}
     return res
 
-# ========================== GEX DATA (CLEAN & SAFE) ==========================
+# ========================== GEX DATA ==========================
 @st.cache_data(ttl=600)
 def get_gex_data(symbol):
-    tk = yf.Ticker(symbol)
-    hist = tk.history(period="2d")
-    if hist.empty:
+    try:
+        tk = yf.Ticker(symbol)
+        hist = tk.history(period="1d")
+        
+        if hist.empty:
+            return None, None
+        
+        spot = hist['Close'].iloc[-1]
+        # We return the list of expirations (strings) instead of the Ticker object
+        expirations = tk.options 
+        
+        return spot, expirations
+    except Exception as e:
+        st.error(f"GEX Fetch Error: {e}")
         return None, None
-    spot = hist['Close'].iloc[-1]
-    expirations = tk.options
-    return spot, expirations
-
 # ========================== STYLING ==========================
 def color_pct(val):
     if pd.isna(val):
@@ -299,7 +306,7 @@ with c1:
     st.write("**Top 6 Leaders 🚀**")
     for _, r in top_gainers.iterrows():
         fire = "🔥" if r.get('Rel Vol', 0) > 1.5 else ""
-        st.write(f"🟢 {r['Asset']}: `{r['Change %']:+.2f}%` {mover, fire}")
+        st.write(f"🟢 {r['Asset']}: `{r['Change %']:+.2f}%` {mover_sent.get(r['Asset'], '')} {fire}")
 
 with c2:
     st.write("**Top 6 Laggards 📉**")
@@ -424,117 +431,95 @@ with tab5:
             st.info("No Tier 1 analyst changes detected.")
 
 with tab6:
-    st.subheader("📉 Gamma Exposure (GEX) Profile")
-    
-    g_col1, g_col2 = st.columns([1, 2])
-    with g_col1:
-        gex_options = ["SPY", "QQQ", "NVDA", "AAPL", "TSLA", "MSFT", "AMZN", "META", "GOOGL"]
-        gex_ticker = st.selectbox("Select Ticker", gex_options, index=0)
-    with g_col2:
-        range_pct = st.slider("Strike Range (% from Spot)", 1, 20, 8, help="Zoom level for the chart")
-
-    with st.spinner(f"Calculating GEX for {gex_ticker}..."):
-        spot, expirations = get_gex_data(gex_ticker)
+        st.subheader("📊 Gamma Exposure (GEX) Profile")
         
-        if spot is None:
-            st.error("Could not fetch price data for this ticker.")
-        elif not expirations:
-            st.error(f"{gex_ticker} has no options chain available.")
-        else:
-            tk = yf.Ticker(gex_ticker)
-            all_opts = []
-            for exp in expirations[:3]:  # Front 3 expirations
-                try:
-                    chain = tk.option_chain(exp)
-                    calls, puts = chain.calls.copy(), chain.puts.copy()
-                    calls['type'] = 'call'
-                    puts['type'] = 'put'
-                    calls['exp'] = exp
-                    puts['exp'] = exp
-                    all_opts.append(pd.concat([calls, puts]))
-                except:
-                    continue
+        g_col1, g_col2 = st.columns([1, 2])
+        with g_col1:
+            gex_options = ["SPY", "QQQ", "NVDA", "AAPL", "TSLA", "MSFT", "AMZN", "META", "GOOGL"]
+            gex_ticker = st.selectbox("Select Ticker", gex_options, index=0)
+        with g_col2:
+            range_pct = st.slider("Strike Range (% from Spot)", 1, 15, 6)
+
+        with st.spinner(f"Analyzing {gex_ticker} Gamma Walls..."):
+            result = get_gex_data(gex_ticker)
             
-            if not all_opts:
-                st.error("Failed to load any option chains.")
+            if result and result[0] is not None:
+                spot, expirations = result
+                tk = yf.Ticker(gex_ticker)
+                all_opts = []
+                
+                for exp in expirations[:3]:
+                    try:
+                        chain = tk.option_chain(exp)
+                        c, p = chain.calls.copy(), chain.puts.copy()
+                        c['type'], p['type'], c['exp'], p['exp'] = 'call', 'put', exp, exp
+                        all_opts.append(pd.concat([c, p]))
+                    except Exception:
+                        continue
+                
+                if all_opts:
+                    df_gex = pd.concat(all_opts)
+                    now = pd.Timestamp.now().tz_localize(None)
+                    df_gex['dte'] = (pd.to_datetime(df_gex['exp']).dt.tz_localize(None) - now).dt.days / 365.0
+                    df_gex['dte'] = df_gex['dte'].clip(lower=1/365)
+                    
+                    df_gex['GEX'] = df_gex.apply(lambda r: calc_gamma(
+                        spot, r['strike'], r['dte'], r['impliedVolatility'], 0.04, 0.01, r['type'], r['openInterest']
+                    ), axis=1)
+                    
+                    df_agg = df_gex.groupby('strike')['GEX'].sum() / 1e6
+                    
+                    # --- CALCULATIONS ---
+                    gamma_flip = df_agg.index[np.abs(df_agg.values).argmin()]
+                    total_gex = df_agg.sum()
+                    resistance = df_agg.idxmax()
+                    support = df_agg.idxmin()
+
+                    # --- SUMMARY METRICS ---
+                    m1, m2, m3 = st.columns(3)
+                    m1.metric("Current Spot", f"{spot:.2f}")
+                    m2.metric("Gamma Flip Level", f"{gamma_flip:.2f}", 
+                              delta=f"{spot - gamma_flip:.2f} from Spot", delta_color="inverse")
+                    m3.metric("Total Net GEX", f"${total_gex:,.1f}M")
+
+                    # --- CHARTING ---
+                    fig, ax = plt.subplots(figsize=(12, 6))
+                    fig.patch.set_facecolor('#0e1117')
+                    ax.set_facecolor('#0e1117')
+                    
+                    bar_colors = ['#00d4ff' if val > 0 else '#ff4b4b' for val in df_agg.values]
+                    ax.bar(df_agg.index, df_agg.values, width=(spot * 0.003), color=bar_colors, alpha=0.8)
+                    
+                    ax.axhline(0, color='white', linewidth=0.8, alpha=0.3)
+                    ax.axvline(spot, color='white', linestyle=':', linewidth=2, label=f'Spot: {spot:.2f}')
+                    ax.axvline(gamma_flip, color='yellow', linestyle='--', linewidth=1.5, label=f'Flip: {gamma_flip:.2f}')
+                    
+                    limit = range_pct / 100
+                    ax.set_xlim(spot * (1 - limit), spot * (1 + limit))
+                    ax.spines['top'].set_visible(False)
+                    ax.spines['right'].set_visible(False)
+                    ax.tick_params(colors='white')
+                    ax.grid(axis='y', linestyle='--', alpha=0.1)
+                    ax.legend(facecolor='#0e1117', edgecolor='none', labelcolor='white')
+                    st.pyplot(fig)
+
+                    # --- BUY/SELL SIGNALS ---
+                    st.divider()
+                    s_col1, s_col2 = st.columns(2)
+                    with s_col1:
+                        st.subheader("🎯 Trade Signal")
+                        if spot > gamma_flip:
+                            st.success("**STRATEGY: BUY CALLS / BULLISH**")
+                            st.caption("Price is above Flip Level. Dealers are providing stability.")
+                        else:
+                            st.error("**STRATEGY: BUY PUTS / BEARISH**")
+                            st.caption("Price is below Flip Level. Volatility is likely to expand.")
+
+                    with s_col2:
+                        st.subheader("🚧 Structure")
+                        st.write(f"**Gamma Wall (Resistance):** `{resistance:.2f}`")
+                        st.write(f"**Volatility Trigger (Support):** `{support:.2f}`")
+                else:
+                    st.error("No options data found.")
             else:
-                df_gex = pd.concat(all_opts, ignore_index=True)
-                now = pd.Timestamp.now()
-                df_gex['dte'] = (pd.to_datetime(df_gex['exp']) - now).dt.days / 365.0
-                df_gex['dte'] = df_gex['dte'].clip(lower=1/365)
-                
-                df_gex['GEX'] = df_gex.apply(lambda r: calc_gamma(
-                    spot, r['strike'], r['dte'], r['impliedVolatility'], 0.04, 0.01, r['type'], r['openInterest']
-                ), axis=1)
-                
-                df_agg = df_gex.groupby('strike')['GEX'].sum() / 1e6
-                
-                # Key levels
-                gamma_flip = df_agg.index[np.abs(df_agg.values).argmin()] if not df_agg.empty else np.nan
-                total_gex = df_agg.sum()
-                pos_gamma_strike = df_agg.idxmax() if (df_agg > 0).any() else np.nan
-                neg_gamma_strike = df_agg.idxmin() if (df_agg < 0).any() else np.nan
-                
-                # Metrics
-                m1, m2, m3, m4 = st.columns(4)
-                m1.metric("Spot Price", f"{spot:.2f}")
-                m2.metric("Gamma Flip", f"{gamma_flip:.2f}", delta=f"{gamma_flip - spot:.2f}")
-                m3.metric("Net GEX", f"${total_gex:,.1f}M")
-                m4.metric("Expirations Used", len(expirations[:3]))
-                
-                # Chart
-                fig, ax = plt.subplots(figsize=(12, 6))
-                fig.patch.set_facecolor('#0e1117')
-                ax.set_facecolor('#0e1117')
-                ax.tick_params(colors='white')
-                ax.xaxis.label.set_color('white')
-                ax.yaxis.label.set_color('white')
-                ax.spines['top'].set_visible(False)
-                ax.spines['right'].set_visible(False)
-                ax.spines['bottom'].set_color('white')
-                ax.spines['left'].set_color('white')
-                
-                bar_colors = ['#00ff00' if v > 0 else '#ff0000' for v in df_agg.values]
-                ax.bar(df_agg.index, df_agg.values, width=spot*0.0035, color=bar_colors, alpha=0.85)
-                
-                ax.axhline(0, color='white', linewidth=0.8, alpha=0.4)
-                ax.axvline(spot, color='#ffffff', linestyle='-', linewidth=2, label=f'Spot: {spot:.2f}')
-                ax.axvline(gamma_flip, color='#ffff00', linestyle='--', linewidth=1.8, label=f'Flip: {gamma_flip:.2f}')
-                if pd.notna(pos_gamma_strike):
-                    ax.axvline(pos_gamma_strike, color='#00ff00', linestyle=':', linewidth=1.5, label=f'Pos Wall: {pos_gamma_strike:.2f}')
-                if pd.notna(neg_gamma_strike):
-                    ax.axvline(neg_gamma_strike, color='#ff0000', linestyle=':', linewidth=1.5, label=f'Neg Wall: {neg_gamma_strike:.2f}')
-                
-                limit = range_pct / 100
-                ax.set_xlim(spot * (1 - limit), spot * (1 + limit))
-                ax.set_ylabel("Dealer GEX ($ Millions)", color='white')
-                ax.set_xlabel("Strike Price", color='white')
-                ax.set_title(f"{gex_ticker} Gamma Exposure Profile (Front 3 Expirations)", color='white')
-                ax.legend(facecolor='#0e1117', labelcolor='white')
-                ax.grid(axis='y', alpha=0.3)
-                st.pyplot(fig)
-                
-                # Key Levels & Signal
-                st.divider()
-                col_sig, col_lev = st.columns(2)
-                
-                with col_sig:
-                    st.subheader("🎯 Current Regime")
-                    if spot > gamma_flip:
-                        st.success("**BULLISH / STABLE** — Price above Gamma Flip")
-                        st.caption("Dealers likely long gamma → dampened volatility, potential pinning.")
-                    else:
-                        st.error("**BEARISH / VOLATILE** — Price below Gamma Flip")
-                        st.caption("Dealers likely short gamma → volatility expansion risk.")
-                    if total_gex > 0:
-                        st.info("Net positive GEX → supportive environment overall")
-                    else:
-                        st.warning("Net negative GEX → pressure on rallies")
-                
-                with col_lev:
-                    st.subheader("🚧 Key Gamma Levels")
-                    if pd.notna(pos_gamma_strike):
-                        st.write(f"**Positive Gamma Wall (Support/Magnet):** `{pos_gamma_strike:.2f}`")
-                    if pd.notna(neg_gamma_strike):
-                        st.write(f"**Negative Gamma Wall (Resistance/Magnet):** `{neg_gamma_strike:.2f}`")
-                    st.caption("Large |GEX| strikes often act as magnets or reversal points due to dealer hedging.")
+                st.error("Could not fetch price data.")
