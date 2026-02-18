@@ -34,123 +34,187 @@ if not check_password():
 
 # ========================== TICKERS ==========================
 GLOBAL_TICKERS = {
-    "S&P 500 Futures (ES)": "ES=F", "Nasdaq 100 Futures (NQ)": "NQ=F",
-    "Dow Jones Futures (YM)": "YM=F", "SPY (S&P 500 ETF)": "SPY",
-    "QQQ (Nasdaq 100 ETF)": "QQQ", "VIX": "^VIX",
-    "10Y Yield (^TNX)": "^TNX", "DXY (US Dollar)": "DX-Y.NYB"
+    "S&P 500 Futures (ES)": "ES=F",
+    "Nasdaq 100 Futures (NQ)": "NQ=F",
+    "Dow Jones Futures (YM)": "YM=F",
+    "SPY (S&P 500 ETF)": "SPY",
+    "QQQ (Nasdaq 100 ETF)": "QQQ",
+    "VIX": "^VIX",
+    "10Y Yield (^TNX)": "^TNX",
+    "DXY (US Dollar)": "DX-Y.NYB"
 }
+
 SECTOR_TICKERS = {
-    "Technology (XLK)": "XLK", "Financials (XLF)": "XLF", "Energy (XLE)": "XLE",
-    "Healthcare (XLV)": "XLV", "Consumer Disc (XLY)": "XLY", "Industrials (XLI)": "XLI",
-    "Utilities (XLU)": "XLU", "Real Estate (XLRE)": "XLRE", "Consumer Staples (XLP)": "XLP",
+    "Technology (XLK)": "XLK",
+    "Financials (XLF)": "XLF",
+    "Energy (XLE)": "XLE",
+    "Healthcare (XLV)": "XLV",
+    "Consumer Disc (XLY)": "XLY",
+    "Industrials (XLI)": "XLI",
+    "Utilities (XLU)": "XLU",
+    "Real Estate (XLRE)": "XLRE",
+    "Consumer Staples (XLP)": "XLP",
     "Materials (XLB)": "XLB"
 }
+
 ETF_TICKERS = {
-    "Bitcoin ETF (IBIT)": "IBIT", "Gold ETF (GLD)": "GLD", "Silver (SLV)": "SLV",
-    "Bonds 20Y+ (TLT)": "TLT", "Semis (SMH)": "SMH", "Ark Innovation (ARKK)": "ARKK"
+    "Bitcoin ETF (IBIT)": "IBIT",
+    "Gold ETF (GLD)": "GLD",
+    "Silver (SLV)": "SLV",
+    "Bonds 20Y+ (TLT)": "TLT",
+    "Semis (SMH)": "SMH",
+    "Ark Innovation (ARKK)": "ARKK"
 }
+
 TWENTYFOUR_TICKERS = {
-    "Bitcoin 24h (BTC-USD)": "BTC-USD", "Ethereum (ETH-USD)": "ETH-USD",
-    "Gold Futures (GC)": "GC=F", "Crude Oil (CL)": "CL=F"
+    "Bitcoin 24h (BTC-USD)": "BTC-USD",
+    "Ethereum (ETH-USD)": "ETH-USD",
+    "Gold Futures (GC)": "GC=F",
+    "Crude Oil (CL)": "CL=F"
 }
+
 MAG7_TICKERS = {
-    "Apple (AAPL)": "AAPL", "Microsoft (MSFT)": "MSFT", "Nvidia (NVDA)": "NVDA",
-    "Amazon (AMZN)": "AMZN", "Alphabet (GOOGL)": "GOOGL", "Meta (META)": "META", "Tesla (TSLA)": "TSLA"
+    "Apple (AAPL)": "AAPL",
+    "Microsoft (MSFT)": "MSFT",
+    "Nvidia (NVDA)": "NVDA",
+    "Amazon (AMZN)": "AMZN",
+    "Alphabet (GOOGL)": "GOOGL",
+    "Meta (META)": "META",
+    "Tesla (TSLA)": "TSLA"
 }
-OPTIONS_TICKERS = {**MAG7_TICKERS, "SPY (S&P 500 ETF)": "SPY", "QQQ (Nasdaq 100 ETF)": "QQQ", "VIX": "^VIX"}
-TIER_1_BANKS = ["Goldman Sachs", "Morgan Stanley", "JPMorgan Chase", "JP Morgan", "Bank of America", "BofA", "Citigroup", "Barclays", "UBS", "Wells Fargo", "Deutsche Bank"]
-ALL_TICKERS = {**GLOBAL_TICKERS, **SECTOR_TICKERS, **ETF_TICKERS, **TWENTYFOUR_TICKERS, **MAG7_TICKERS}
+
+OPTIONS_TICKERS = {
+    **MAG7_TICKERS,
+    "SPY (S&P 500 ETF)": "SPY",
+    "QQQ (Nasdaq 100 ETF)": "QQQ",
+    "VIX": "^VIX"
+}
+
+TIER_1_BANKS = [
+    "Goldman Sachs", "Morgan Stanley", "JPMorgan Chase", "JP Morgan",
+    "Bank of America", "BofA", "Citigroup", "Barclays", "UBS",
+    "Wells Fargo", "Deutsche Bank", "Credit Suisse"
+]
+
+ALL_TICKERS = {**GLOBAL_TICKERS, **SECTOR_TICKERS, **ETF_TICKERS,
+               **TWENTYFOUR_TICKERS, **MAG7_TICKERS}
 
 # ========================== HELPERS ==========================
 def analyze_sentiment(text):
-    if not text or not isinstance(text, str): return "⚖️ Neutral"
-    bullish = ['surge', 'up', 'rise', 'gain', 'jump', 'rally', 'growth', 'bull', 'high', 'positive', 'win', 'beat', 'boost', 'strong', 'outperform', 'soar', 'raises', 'upgrade', 'profit', 'dividend']
-    bearish = ['fall', 'down', 'drop', 'slump', 'plunge', 'bear', 'low', 'negative', 'loss', 'crash', 'dip', 'cut', 'sink', 'weak', 'miss', 'lowers', 'decline', 'downgrade', 'debt']
+    if not text or not isinstance(text, str):
+        return "⚖️ Neutral"
+    bullish = ['surge', 'up', 'rise', 'gain', 'jump', 'rally', 'growth', 'bull', 'high', 'positive', 'win', 'beat', 'boost', 'strong', 'outperform', 'soar', 'raises']
+    bearish = ['fall', 'down', 'drop', 'slump', 'plunge', 'bear', 'low', 'negative', 'loss', 'crash', 'dip', 'cut', 'sink', 'weak', 'miss', 'lowers', 'decline']
     text = text.lower()
-    b_score = sum(1 for w in bullish if w in text)
-    r_score = sum(1 for w in bearish if w in text)
-    if b_score > r_score: return "🐂 Bullish"
-    if r_score > b_score: return "🐻 Bearish"
+    if sum(1 for w in bullish if w in text) > sum(1 for w in bearish if w in text):
+        return "🐂 Bullish"
+    if sum(1 for w in bearish if w in text) > sum(1 for w in bullish if w in text):
+        return "🐻 Bearish"
     return "⚖️ Neutral"
 
 @st.cache_data(ttl=45)
 def fetch_all_market_data():
     tickers_list = list(ALL_TICKERS.values())
     ticker_to_label = {v: k for k, v in ALL_TICKERS.items()}
+
     daily = yf.download(tickers=tickers_list, period="60d", interval="1d", progress=False)
-    
-    try:
-        spy_vol_today = daily['Volume']['SPY'].iloc[-1]
-        spy_vol_avg = daily['Volume']['SPY'].iloc[-22:-1].mean()
-        spy_rvol = spy_vol_today / spy_vol_avg if spy_vol_avg > 0 else 1.0
-    except: spy_rvol = 1.0
+    intra = yf.download(tickers=tickers_list, period="1d", interval="5m", prepost=True, progress=False)
 
     rows = []
     for t in tickers_list:
         label = ticker_to_label.get(t, t)
         try:
-            closes = daily['Close'][t].dropna()
-            price = closes.iloc[-1]
-            prev_close = closes.iloc[-2]
-            change = (price - prev_close) / prev_close * 100
-            
-            vols = daily['Volume'][t].dropna()
-            rel_vol = vols.iloc[-1] / vols.iloc[-22:-1].mean() if len(vols) > 22 else 1.0
-            mkt_rel_vol = rel_vol / spy_rvol if spy_rvol > 0 else 1.0
+            prev_close = daily['Close'][t].dropna().iloc[-2] if len(daily['Close'][t].dropna()) >= 2 else np.nan
+            price = intra['Close'][t].dropna().iloc[-1] if not intra['Close'][t].dropna().empty else daily['Close'][t].iloc[-1]
 
-            rows.append({"Asset": label, "Symbol": t, "Price": price, "Change %": change, "Rel Vol": rel_vol, "Mkt Rel Vol": mkt_rel_vol})
+            change = (price - prev_close) / prev_close * 100 if not np.isnan(prev_close) and prev_close != 0 else np.nan
+
+            day_vol = intra['Volume'][t].sum() if 'Volume' in intra and t in intra['Volume'] else 0
+            avg_vol = daily['Volume'][t].dropna().iloc[-21:-1].mean() if len(daily['Volume'][t].dropna()) >= 21 else np.nan
+            rel_vol = day_vol / avg_vol if avg_vol and avg_vol > 0 else np.nan
+
+            rows.append({"Asset": label, "Symbol": t, "Price": price, "Change %": change, "Rel Vol": rel_vol})
         except:
-            rows.append({"Asset": label, "Symbol": t, "Price": np.nan, "Change %": np.nan, "Rel Vol": np.nan, "Mkt Rel Vol": np.nan})
+            rows.append({"Asset": label, "Symbol": t, "Price": np.nan, "Change %": np.nan, "Rel Vol": np.nan})
     return pd.DataFrame(rows)
 
 @st.cache_data(ttl=300)
 def get_ticker_news(symbol):
     try:
-        data = yf.Ticker(symbol).news
-        # Handle different response formats from yfinance
-        if isinstance(data, dict) and 'news' in data:
-            return data['news'][:3]
-        return data[:3] if isinstance(data, list) else []
+        return yf.Ticker(symbol).news[:3]
     except:
         return []
 
+@st.cache_data(ttl=600)
+def fetch_finviz_news():
+    try:
+        return pd.DataFrame(News().get_news().get('news', []))[:10]
+    except:
+        return pd.DataFrame()
 @st.cache_data(ttl=3600)
 def fetch_earnings_and_ratings(days_window=7):
-    ratings_list, earnings_list = [], []
+    earnings_list = []
+    ratings_list = []
     today = datetime.date.today()
+    
     for label, symbol in ALL_TICKERS.items():
         try:
-            tk = yf.Ticker(symbol)
-            recs = tk.recommendations
-            if recs is not None and not recs.empty:
-                latest = recs.tail(5).copy()
-                latest['Symbol'] = symbol
-                ratings_list.append(latest[latest['Firm'].str.contains('|'.join(TIER_1_BANKS), case=False, na=False)])
+            ticker = yf.Ticker(symbol)
             
-            cal = tk.calendar
-            if cal is not None and 'Earnings Date' in cal:
-                for e_dt in cal['Earnings Date']:
-                    e_date = e_dt.date()
-                    if abs((e_date - today).days) <= days_window:
-                        earnings_list.append({"Asset": label, "Symbol": symbol, "Date": e_date, "Status": "🚀 Upcoming" if e_date >= today else "✅ Reported"})
-        except: continue
-    return pd.concat(ratings_list) if ratings_list else pd.DataFrame(), pd.DataFrame(earnings_list)
+            # 1. Analyst Ratings with Price Targets
+            recs = ticker.recommendations
+            if recs is not None and not recs.empty:
+                latest = recs.tail(10).copy()
+                latest['Symbol'] = symbol
+                # Filter for Tier 1 Banks
+                latest = latest[latest['Firm'].str.contains('|'.join(TIER_1_BANKS), case=False, na=False)]
+                ratings_list.append(latest)
 
-@st.cache_data(ttl=300)
+            # 2. Dynamic Earnings Check
+            cal = ticker.calendar
+            if cal is not None and 'Earnings Date' in cal:
+                # Some symbols return a list of potential dates
+                e_dates = cal['Earnings Date']
+                for e_dt in e_dates:
+                    e_date = e_dt.date()
+                    # Check if date is within the dynamic window (plus or minus)
+                    if abs((e_date - today).days) <= days_window:
+                        news = ticker.news[:3]
+                        sent = analyze_sentiment(news[0].get('title', '')) if news else "⚖️ Neutral"
+                        earnings_list.append({
+                            "Asset": label,
+                            "Symbol": symbol,
+                            "Earnings Date": e_date,
+                            "Sentiment": sent,
+                            "Status": "Upcoming" if e_date >= today else "Reported"
+                        })
+        except:
+            continue
+            
+    return (pd.concat(ratings_list) if ratings_list else pd.DataFrame()), pd.DataFrame(earnings_list)
+
+
+@st.cache_data(ttl=300, show_spinner="Fetching options chains...")
 def get_options_pcr():
     res = {}
     for label, sym in OPTIONS_TICKERS.items():
         try:
             tk = yf.Ticker(sym)
-            exps = tk.options[:3]
+            exps = tk.options
+            if not exps:
+                res[label] = {"error": "No options"}
+                continue
             cv = pv = 0.0
-            for exp in exps:
+            for exp in exps[:5]:
                 ch = tk.option_chain(exp)
-                cv += ch.calls['volume'].sum()
-                pv += ch.puts['volume'].sum()
+                cv += ch.calls['volume'].fillna(0).sum()
+                pv += ch.puts['volume'].fillna(0).sum()
             pcr = pv / cv if cv > 0 else 0.0
-            res[label] = {"pcr": pcr, "call_vol": int(cv), "put_vol": int(pv)}
-        except: res[label] = {"error": "N/A"}
+            sent = ("🐂 Strongly Bullish" if pcr < 0.75 else "🐂 Bullish" if pcr < 0.90 else
+                    "⚖️ Neutral" if pcr < 1.10 else "🐻 Bearish" if pcr < 1.30 else "🐻 Strongly Bearish")
+            res[label] = {"pcr": pcr, "call_vol": int(cv), "put_vol": int(pv), "sentiment": sent}
+        except Exception as e:
+            res[label] = {"error": str(e)}
     return res
 
 # ========================== STYLING ==========================
@@ -159,86 +223,186 @@ def color_pct(val):
     return 'color: #00ff00' if val > 0 else 'color: #ff4b4b' if val < 0 else ''
 
 def color_rel(val):
-    if pd.isna(val) or val < 1.5: return ''
-    return 'background-color: #44475a; color: #8be9fd; font-weight: bold'
+    if pd.isna(val): return ''
+    if val > 2.0: return 'background-color: #90ee90; font-weight: bold'
+    if val > 1.5: return 'background-color: #98fb98'
+    if val < 0.5: return 'background-color: #ffb6c1'
+    return ''
 
-# ========================== DATA PROCESSING ==========================
+# ========================== SIDEBAR ==========================
+st.sidebar.divider()
+st.sidebar.subheader("🗞️ Market Intelligence")
+news_data = fetch_finviz_news()
+if not news_data.empty:
+    for _, r in news_data.iterrows():
+        with st.sidebar.expander(f"{r['Source']} | {r['Date']}"):
+            st.write(r['Title'])
+            if r.get('url') or r.get('URL'):
+                st.markdown(f"[Read]({r.get('url') or r.get('URL')})")
+else:
+    st.sidebar.info("News unavailable")
+
+st.sidebar.title("🏛️ Market Settings")
 refresh = st.sidebar.number_input('Refresh rate (sec)', 15, 600, 30)
 st_autorefresh(interval=refresh * 1000, key="refresh")
 
+# ========================== DATA ==========================
+est = pytz.timezone('US/Eastern')
+time_now = datetime.datetime.now(est).strftime('%H:%M:%S')
+
 full_market = fetch_all_market_data().dropna(subset=['Change %'])
-spy_change = full_market.loc[full_market['Symbol'] == 'SPY', 'Change %'].values[0] if not full_market.empty else 0
-full_market['RS'] = full_market['Change %'] - spy_change
+
+global_df = full_market[full_market['Asset'].isin(GLOBAL_TICKERS.keys())].copy()
+sector_df = full_market[full_market['Asset'].isin(SECTOR_TICKERS.keys())].copy()
+etf_df    = full_market[full_market['Asset'].isin(ETF_TICKERS.keys())].copy()
+tf_df     = full_market[full_market['Asset'].isin(TWENTYFOUR_TICKERS.keys())].copy()
+mag7_df   = full_market[full_market['Asset'].isin(MAG7_TICKERS.keys())].copy()
+
+for df in [global_df, sector_df, etf_df, tf_df, mag7_df]:
+    df.sort_values('Change %', ascending=False, inplace=True)
+
+benchmark_change = full_market.loc[full_market['Asset'] == "SPY (S&P 500 ETF)", 'Change %'].iloc[0] if "SPY (S&P 500 ETF)" in full_market['Asset'].values else 0.0
+for df in [sector_df, etf_df, tf_df, mag7_df]:
+    df['RS'] = df['Change %'] - benchmark_change
 
 top_gainers = full_market.nlargest(6, 'Change %')
 top_losers  = full_market.nsmallest(6, 'Change %')
 
+# Mover news
+mover_sent = {}
+mover_news = {}
+for _, row in pd.concat([top_gainers, top_losers]).drop_duplicates('Asset').iterrows():
+    items = get_ticker_news(row['Symbol'])
+    mover_news[row['Asset']] = items
+    if not items:
+        mover_sent[row['Asset']] = "❓ No News"
+    else:
+        sents = [analyze_sentiment(i.get('title','')) for i in items]
+        mover_sent[row['Asset']] = "🐂 Bullish" if sents.count("🐂 Bullish") > sents.count("🐻 Bearish") else "🐻 Bearish" if sents.count("🐻 Bearish") > sents.count("🐂 Bullish") else "⚖️ Neutral"
+
 # ========================== MAIN UI ==========================
 st.title("🏛️ Pro Market Terminal")
-est_time = datetime.datetime.now(pytz.timezone('US/Eastern')).strftime('%H:%M:%S')
-st.caption(f"Live EST {est_time} • Benchmarking vs SPY")
+st.caption(f"Live • EST {time_now} • Refresh {refresh}s")
 
-# Scanner Section
+# Scanner
+st.subheader("🔍 Market Scanner")
 c1, c2, c3 = st.columns([2, 2, 1])
 with c1:
-    st.markdown("**Top Leaders 🚀**")
+    st.write("**Top 6 Leaders 🚀**")
     for _, r in top_gainers.iterrows():
-        news = get_ticker_news(r['Symbol'])
-        # Safety check for news and title
-        sent = analyze_sentiment(news[0].get('title', '')) if news and len(news) > 0 else "⚖️ Neutral"
-        st.write(f"🟢 {r['Asset']}: `{r['Change %']:+.2f}%` {sent} {'🔥' if r['Mkt Rel Vol'] > 1.2 else ''}")
+        st.write(f"🟢 {r['Asset']}: `{r['Change %']:+.2f}%` {mover_sent.get(r['Asset'],'')} {'🔥' if r.get('Rel Vol',0)>1.5 else ''}")
 with c2:
-    st.markdown("**Top Laggards 📉**")
+    st.write("**Top 6 Laggards 📉**")
     for _, r in top_losers.iterrows():
-        news = get_ticker_news(r['Symbol'])
-        # Safety check for news and title
-        sent = analyze_sentiment(news[0].get('title', '')) if news and len(news) > 0 else "⚖️ Neutral"
-        st.write(f"🔴 {r['Asset']}: `{r['Change %']:+.2f}%` {sent} {'🔥' if r['Mkt Rel Vol'] > 1.2 else ''}")
+        st.write(f"🔴 {r['Asset']}: `{r['Change %']:+.2f}%` {mover_sent.get(r['Asset'],'')} {'🔥' if r.get('Rel Vol',0)>1.5 else ''}")
 with c3:
     up = len(full_market[full_market['Change %'] > 0])
-    st.metric("Breadth", f"{up}↑ {len(full_market)-up}↓", delta=f"{up - (len(full_market)-up)}")
+    st.metric("Breadth", f"{up} ↑ / {len(full_market)-up} ↓", delta=up-(len(full_market)-up))
 
 st.divider()
 
-# Tabs
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["🌎 Indices", "📈 Sectors & Mag7", "📊 RS Analysis", "⚖️ Options", "🎯 Analyst"])
+# TABS
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "🌎 Global Indices",
+    "📈 Sectors, ETFs, 24h & Mag7",
+    "📊 Relative Strength & Charts",
+    "⚖️ Options Sentiment",
+    "🎯 Analyst & Earnings"
+])
 
 with tab1:
-    df_global = full_market[full_market['Asset'].isin(GLOBAL_TICKERS.keys())]
-    st.dataframe(df_global.style.format({"Price": "{:.2f}", "Change %": "{:+.2f}%", "Rel Vol": "{:.2f}x", "Mkt Rel Vol": "{:.2f}x"})
-                 .map(color_pct, subset=["Change %"]).map(color_rel, subset=["Mkt Rel Vol"]), use_container_width=True, hide_index=True)
+    st.subheader("Major Markets & Indices")
+    st.dataframe(
+        global_df.drop(columns=['Symbol']).style
+            .format({"Price": "{:.2f}", "Change %": "{:+.2f}%", "Rel Vol": "{:.2f}x"})
+            .map(color_pct, subset=["Change %"])
+            .map(color_rel, subset=["Rel Vol"]),
+        use_container_width=True, hide_index=True
+    )
 
 with tab2:
-    c1, c2 = st.columns(2)
-    with c1:
-        st.subheader("Sectors")
-        df_sec = full_market[full_market['Asset'].isin(SECTOR_TICKERS.keys())]
-        st.dataframe(df_sec[['Asset', 'Change %', 'Mkt Rel Vol', 'RS']].style.format("{:.2f}").map(color_pct, subset=['Change %', 'RS']), use_container_width=True, hide_index=True)
-    with c2:
-        st.subheader("Magnificent 7")
-        df_m7 = full_market[full_market['Asset'].isin(MAG7_TICKERS.keys())]
-        st.dataframe(df_m7[['Asset', 'Change %', 'Mkt Rel Vol', 'RS']].style.format("{:.2f}").map(color_pct, subset=['Change %', 'RS']), use_container_width=True, hide_index=True)
+    c1, c2, c3, c4 = st.columns(4)
+    for name, df, col in zip(["Sectors","ETFs","24h & Commodities","Magnificent 7"],
+                             [sector_df, etf_df, tf_df, mag7_df], [c1,c2,c3,c4]):
+        with col:
+            st.subheader(name)
+            st.dataframe(
+                df.drop(columns=['Symbol']).style
+                    .format({"Price": "{:.2f}", "Change %": "{:+.2f}%", "Rel Vol": "{:.2f}x", "RS": "{:+.2f}"})
+                    .map(color_pct, subset=["Change %","RS"])
+                    .map(color_rel, subset=["Rel Vol"]),
+                use_container_width=True, hide_index=True
+            )
 
 with tab3:
-    st.subheader("Relative Strength (vs SPY)")
-    st.bar_chart(full_market[full_market['Asset'].isin(SECTOR_TICKERS.keys())].set_index('Asset')['RS'])
+    st.subheader(f"Relative Strength vs SPY")
+    for name, df in [("Sectors", sector_df), ("24h & Commodities", tf_df), ("Mag7", mag7_df)]:
+        st.write(f"**{name}**")
+        st.bar_chart(df.set_index("Asset")["RS"])
+        st.divider()
+
+    st.subheader("Intraday Charts")
+    sel = st.multiselect("Select assets", list(ALL_TICKERS.keys()),
+                         default=["SPY (S&P 500 ETF)", "Bitcoin 24h (BTC-USD)", "Nvidia (NVDA)"])
+    for lab in sel:
+        data = yf.Ticker(ALL_TICKERS[lab]).history(period="1d", interval="5m")
+        if not data.empty:
+            st.write(f"**{lab}**")
+            st.line_chart(data['Close'].tz_convert('US/Eastern'))
 
 with tab4:
-    st.subheader("Options PCR (Institutional Sentiment)")
-    pcr_data = get_options_pcr()
-    cols = st.columns(4)
-    for i, (lab, info) in enumerate(pcr_data.items()):
-        if "pcr" in info:
-            cols[i%4].metric(lab, f"{info['pcr']:.2f}", "Bullish" if info['pcr'] < 0.85 else "Bearish" if info['pcr'] > 1.1 else "Neutral")
+    st.subheader("Options Sentiment (PCR)")
+    st.caption("Put/Call Ratio • <0.8 Bullish • >1.1 Bearish • nearest 5 expirations")
+    data = get_options_pcr()
+    cols = st.columns(5)
+    for i, (label, info) in enumerate(data.items()):
+        c = cols[i % 5]
+        if "error" in info:
+            c.error(f"{label}\n{info['error']}")
+        else:
+            c.metric(label, f"{info['pcr']:.2f}", info['sentiment'],
+                     help=f"Call: {info['call_vol']:,} • Put: {info['put_vol']:,}")
+
+    # Aggregate
+    tc = sum(d.get("call_vol",0) for d in data.values() if "error" not in d)
+    tp = sum(d.get("put_vol",0) for d in data.values() if "error" not in d)
+    ap = tp / tc if tc else 0
+    col1, col2 = st.columns([1,3])
+    col1.metric("Aggregate PCR", f"{ap:.2f}")
+    if ap < 0.80: col2.success("**Strongly Bullish** options flow")
+    elif ap > 1.10: col2.error("**Strongly Bearish** options flow")
+    else: col2.info("**Neutral** options flow")
 
 with tab5:
-    days = st.slider("Window", 1, 30, 7)
-    r_df, e_df = fetch_earnings_and_ratings(days)
-    ca, cb = st.columns(2)
-    with ca:
-        st.write("**Earnings**")
-        st.dataframe(e_df, use_container_width=True, hide_index=True) if not e_df.empty else st.info("Clear calendar")
-    with cb:
-        st.write("**Analyst Targets**")
-        if not r_df.empty:
-            st.dataframe(r_df[['Symbol', 'Firm', 'To Grade']].tail(10), use_container_width=True, hide_index=True)
+    st.subheader("🎯 Market Moving Events")
+    
+    # Dynamic Control for the timeframe
+    days_range = st.slider("Select Earnings/Analyst Window (Days)", 1, 30, 7)
+    
+    ratings_df, earnings_df = fetch_earnings_and_ratings(days_window=days_range)
+    
+    col_e, col_r = st.columns(2)
+    
+    with col_e:
+        st.write(f"**Earnings (±{days_range} Days)**")
+        if not earnings_df.empty:
+            # Sort by date so soonest is first
+            earnings_df = earnings_df.sort_values("Earnings Date")
+            st.dataframe(earnings_df, use_container_width=True, hide_index=True)
+        else:
+            st.info(f"No earnings found in the {days_range} day window.")
+            
+    with col_r:
+        st.write("**Tier 1 Analyst Moves & Targets**")
+        if not ratings_df.empty:
+            # We look for common target price column names in yfinance
+            target_cols = [c for c in ['Target Price', 'Price Target', 'New Target'] if c in ratings_df.columns]
+            display_cols = ['Symbol', 'Firm', 'To Grade'] + target_cols
+            
+            st.dataframe(
+                ratings_df[display_cols].tail(15), 
+                use_container_width=True, 
+                hide_index=True
+            )
+        else:
+            st.info("No Tier 1 analyst changes detected in this window.")
