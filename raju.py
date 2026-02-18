@@ -124,24 +124,31 @@ cat_col1, cat_col2 = st.columns(2)
 with cat_col1:
     st.write("**🔥 High Volume Gainers**")
     for _, row in top_gainers.iterrows():
-        t_news = yf.Ticker(row['Symbol']).news[:1]
-        if t_news:
-            headline = t_news[0]['title']
-            sent = analyze_sentiment(headline)
-            st.success(f"**{row['Symbol']}** ({row['Change %']:+.2f}%) | {sent}\n\n{headline}")
-        else:
-            st.write(f"**{row['Symbol']}** ({row['Change %']:+.2f}%) | No recent catalyst found.")
+        try:
+            t_news = yf.Ticker(row['Symbol']).news
+            # Safety check: is there news and does it have a 'title'?
+            if t_news and 'title' in t_news[0]:
+                headline = t_news[0]['title']
+                sent = analyze_sentiment(headline)
+                st.success(f"**{row['Symbol']}** ({row['Change %']:+.2f}%) | {sent}\n\n{headline}")
+            else:
+                st.write(f"**{row['Symbol']}** ({row['Change %']:+.2f}%) | No recent headline.")
+        except Exception:
+            st.write(f"**{row['Symbol']}** | News temporarily unavailable.")
 
 with cat_col2:
     st.write("**📉 High Volume Losers**")
     for _, row in top_losers.iterrows():
-        t_news = yf.Ticker(row['Symbol']).news[:1]
-        if t_news:
-            headline = t_news[0]['title']
-            sent = analyze_sentiment(headline)
-            st.error(f"**{row['Symbol']}** ({row['Change %']:+.2f}%) | {sent}\n\n{headline}")
-        else:
-            st.write(f"**{row['Symbol']}** ({row['Change %']:+.2f}%) | No recent catalyst found.")
+        try:
+            t_news = yf.Ticker(row['Symbol']).news
+            if t_news and 'title' in t_news[0]:
+                headline = t_news[0]['title']
+                sent = analyze_sentiment(headline)
+                st.error(f"**{row['Symbol']}** ({row['Change %']:+.2f}%) | {sent}\n\n{headline}")
+            else:
+                st.write(f"**{row['Symbol']}** ({row['Change %']:+.2f}%) | No recent headline.")
+        except Exception:
+            st.write(f"**{row['Symbol']}** | News temporarily unavailable.")
 
 st.divider()
 
