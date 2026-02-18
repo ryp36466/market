@@ -20,7 +20,7 @@ def check_password():
      st.title(" Pro Market Access")
      st.text_input("Enter Password", type="password", on_change=password_entered, key="password")
     return False
-elif not st.session_state["password_correct"]:
+else if not st.session_state["password_correct"]:
     st.text_input("Enter Password", type="password", on_change=password_entered, key="password")
     st.error(" Access Denied")
     return False
