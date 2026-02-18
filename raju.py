@@ -436,57 +436,46 @@ with tab6:
     gex_ticker = st.selectbox("Select Ticker for GEX", gex_options, index=0)
     
     with st.spinner(f"Calculating GEX for {gex_ticker}..."):
-       spot, expirations = get_gex_data(gex_ticker)
+        # FIX 1: Only unpack 2 values (spot and expirations)
+        result = get_gex_data(gex_ticker)
         
-        if tk and expirations:
+        if result and result[0] is not None:
+            spot, expirations = result
+            tk = yf.Ticker(gex_ticker) # Local ticker object
             all_opts = []
-            # Use first 3 expiries to avoid rate limits and keep it fast
+            
             for exp in expirations[:3]:
                 try:
                     chain = tk.option_chain(exp)
-                    calls, puts = chain.calls.copy(), chain.puts.copy()
-                    calls['type'], puts['type'] = 'call', 'put'
-                    calls['exp'], puts['exp'] = exp, exp
-                    all_opts.append(pd.concat([calls, puts]))
+                    c, p = chain.calls.copy(), chain.puts.copy()
+                    c['type'], p['type'], c['exp'], p['exp'] = 'call', 'put', exp, exp
+                    all_opts.append(pd.concat([c, p]))
                 except Exception:
                     continue
             
-            if not all_opts:
-                st.error("No options data available for this ticker right now.")
-            else:
+            # FIX 2: Ensure this 'if' is perfectly aligned
+            if all_opts:
                 df_gex = pd.concat(all_opts)
-                
-                # Fix: Ensure both dates are 'naive' (no timezone) to allow subtraction
                 now = pd.Timestamp.now().tz_localize(None)
                 df_gex['dte'] = (pd.to_datetime(df_gex['exp']).dt.tz_localize(None) - now).dt.days / 365.0
                 df_gex['dte'] = df_gex['dte'].clip(lower=1/365)
                 
-                # Run Gamma Calculation
                 df_gex['GEX'] = df_gex.apply(lambda r: calc_gamma(
-                    spot, r['strike'], r['dte'], r['impliedVolatility'], 
-                    0.04, 0.01, r['type'], r['openInterest']
+                    spot, r['strike'], r['dte'], r['impliedVolatility'], 0.04, 0.01, r['type'], r['openInterest']
                 ), axis=1)
                 
-                # Group and Scale
                 df_agg = df_gex.groupby('strike')['GEX'].sum() / 1e6
                 
-                # Plotting
                 fig, ax = plt.subplots(figsize=(12, 5))
                 fig.patch.set_facecolor('#0e1117')
                 ax.set_facecolor('#0e1117')
-                
-                # Style the chart to match your terminal
                 ax.bar(df_agg.index, df_agg.values, width=(spot * 0.003), color='#00d4ff', alpha=0.8)
-                ax.axvline(spot, color='#ff4b4b', linestyle='--', linewidth=2, label=f'Spot: {spot:.2f}')
-                
-                ax.set_xlim(spot * 0.94, spot * 1.06) # Zoom to +/- 6%
+                ax.axvline(spot, color='#ff4b4b', linestyle='--', label=f'Spot: {spot:.2f}')
+                ax.set_xlim(spot * 0.94, spot * 1.06)
                 ax.tick_params(colors='white')
-                ax.set_xlabel("Strike Price", color='white')
-                ax.set_ylabel("GEX ($ Millions)", color='white')
                 ax.grid(True, alpha=0.1)
-                ax.legend(facecolor='#0e1117', labelcolor='white')
-                
                 st.pyplot(fig)
-                st.info("💡 **GEX Insight:** Large bars represent 'Gamma Walls.' These strikes often act as strong support or resistance because market makers must hedge heavily there.")
+            else:
+                st.error("No options data found for this ticker.")
         else:
-            st.error("Data fetch failed. Check your internet or Ticker symbol.")
+            st.error("Could not fetch spot price. Yahoo Finance might be throttling requests.")
