@@ -436,7 +436,7 @@ with tab6:
     gex_ticker = st.selectbox("Select Ticker for GEX", gex_options, index=0)
     
     with st.spinner(f"Calculating GEX for {gex_ticker}..."):
-        tk, spot, expirations = get_gex_data(gex_ticker)
+       spot, expirations = get_gex_data(gex_ticker)
         
         if tk and expirations:
             all_opts = []
