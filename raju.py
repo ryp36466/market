@@ -357,18 +357,34 @@ with tab4:
     else: col2.info("**Neutral** options flow")
 
 with tab5:
-    st.subheader("🎯 Analyst Moves & Earnings")
+    st.subheader("🎯 Market Moving Events")
+    
+    # Ensure this function is called once at the start of the tab
     ratings_df, earnings_df = fetch_earnings_and_ratings()
-    c1, c2 = st.columns(2)
-    with c1:
-        st.write("**Earnings (today/yesterday)**")
-        st.dataframe(earnings_df, use_container_width=True, hide_index=True) if not earnings_df.empty else st.info("No earnings today")
-    with c2:
-        st.write("**Tier-1 Analyst Changes**")
-        if not ratings_df.empty:
-            st.dataframe(ratings_df[['Symbol','Firm','To Grade','From Grade']].tail(10),
-                         use_container_width=True, hide_index=True)
+    
+    col_e, col_r = st.columns(2)
+    
+    with col_e:
+        st.markdown("### 📅 Recent/Upcoming Earnings")
+        if not earnings_df.empty:
+            # Use dataframe instead of table for a cleaner look
+            st.dataframe(earnings_df, use_container_width=True, hide_index=True)
         else:
-            st.info("No Tier-1 changes today")
-
-st.caption("Data from yfinance + finviz • Auto-refreshes every 30s by default")
+            st.info("No earnings found for tracked tickers in the 48h window.")
+            
+    with col_r:
+        st.markdown("### 🏦 Tier 1 Analyst Moves")
+        if not ratings_df.empty:
+            # Added 'Price Target' to the display columns
+            # Note: Ensure your fetch function includes 'Price Target' if available
+            cols_to_show = ['Symbol', 'Firm', 'To Grade', 'From Grade']
+            if 'Price Target' in ratings_df.columns:
+                cols_to_show.append('Price Target')
+                
+            st.dataframe(
+                ratings_df[cols_to_show].tail(10), 
+                use_container_width=True, 
+                hide_index=True
+            )
+        else:
+            st.info("No Tier 1 analyst changes detected for tracked tickers today.")
