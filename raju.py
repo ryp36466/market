@@ -469,13 +469,16 @@ with tab6:
                 
                 df_agg = df_gex.groupby('strike')['GEX'].sum() / 1e6
                 
-                # --- CALCULATIONS (FILTERED FOR ACCURACY) ---
-                df_near_price = df_agg[(df_agg.index > spot * 0.85) & (df_agg.index < spot * 1.15)]
+                # --- CALCULATIONS (STRICT FILTER FOR ACCURACY) ---
+                # Search for the Flip only within 5% of the spot price
+                df_near_price = df_agg[(df_agg.index > spot * 0.95) & (df_agg.index < spot * 1.05)]
                 
                 if not df_near_price.empty:
                     gamma_flip = df_near_price.index[np.abs(df_near_price.values).argmin()]
                 else:
-                    gamma_flip = df_agg.index[np.abs(df_agg.values).argmin()]
+                    # Fallback to a 10% range if 5% is empty
+                    df_wider = df_agg[(df_agg.index > spot * 0.90) & (df_agg.index < spot * 1.10)]
+                    gamma_flip = df_wider.index[np.abs(df_wider.values).argmin()] if not df_wider.empty else df_agg.index[0]
                 
                 total_gex = df_agg.sum()
                 resistance = df_agg.idxmax()
