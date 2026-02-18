@@ -6,7 +6,7 @@ from streamlit_autorefresh import st_autorefresh
 import datetime
 import pytz
 from finvizfinance.news import News
-import matplotlib.pyplot asplt
+import matplotlib.pyplot as plt
 from scipy.stats import norm
 
 # ========================== PAGE CONFIG ==========================
