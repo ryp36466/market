@@ -5,11 +5,12 @@ import numpy as np
 from streamlit_autorefresh import st_autorefresh
 import datetime
 import pytz
+import finnhub
 from finvizfinance.news import News
 
 # ========================== PAGE CONFIG ==========================
 st.set_page_config(page_title="Pro Market Terminal", page_icon="🏛️", layout="wide")
-
+finnhub_client = finnhub.Client(api_key='d6au4n9r01qnr27itio0d6au4n9r01qnr27itiog')
 # ========================== PASSWORD PROTECTION ==========================
 def check_password():
     def password_entered():
@@ -156,43 +157,54 @@ def fetch_finviz_news():
         return pd.DataFrame()
 
 @st.cache_data(ttl=3600)
-def fetch_earnings_and_ratings(days_window=7):
+def fetch_earnings_and_ratings_finnhub(days_window=7):
     earnings_list = []
     ratings_list = []
-    today = datetime.date.today()
     
+    today = datetime.date.today()
+    future_date = today + datetime.timedelta(days=days_window)
+    past_date = today - datetime.timedelta(days=days_window)
+
+    # 1. Fetch Earnings Calendar for ALL tickers in one call (Efficient!)
+    try:
+        earnings = finnhub_client.earnings_calendar(
+            _from=past_date.strftime('%Y-%m-%d'), 
+            to=future_date.strftime('%Y-%m-%d'), 
+            symbol="", international=False
+        )
+        
+        # Filter for only the symbols in your terminal
+        target_symbols = list(ALL_TICKERS.values())
+        for event in earnings.get('earningsCalendar', []):
+            if event['symbol'] in target_symbols:
+                earnings_list.append({
+                    "Asset": event['symbol'],
+                    "Date": event['date'],
+                    "EPS Estimate": event.get('epsEstimate', 'N/A'),
+                    "Status": "Upcoming" if event['date'] >= str(today) else "Reported"
+                })
+    except Exception as e:
+        st.error(f"Finnhub Earnings Error: {e}")
+
+    # 2. Fetch Recommendation Trends for each ticker
     for label, symbol in ALL_TICKERS.items():
         try:
-            ticker = yf.Ticker(symbol)
-            
-            # Analyst ratings
-            recs = ticker.recommendations
-            if recs is not None and not recs.empty:
-                latest = recs.tail(10).copy()
-                latest['Symbol'] = symbol
-                latest = latest[latest['Firm'].str.contains('|'.join(TIER_1_BANKS), case=False, na=False)]
-                ratings_list.append(latest)
-
-            # Earnings calendar
-            cal = ticker.calendar
-            if cal is not None and 'Earnings Date' in cal:
-                e_dates = cal['Earnings Date']
-                if not isinstance(e_dates, list):
-                    e_dates = [e_dates]
-                for e_dt in e_dates:
-                    e_date = e_dt.date() if hasattr(e_dt, 'date') else e_dt
-                    if abs((e_date - today).days) <= days_window:
-                        news = ticker.news[:3]
-                        sent = analyze_sentiment(news[0].get('title', '') if news else "")
-                        earnings_list.append({
-                            "Asset": label,
-                            "Symbol": symbol,
-                            "Earnings Date": e_date,
-                            "Sentiment": sent,
-                            "Status": "Upcoming" if e_date >= today else "Reported"
-                        })
-        except Exception:
+            # Finnhub provides a trend (Buy, Strong Buy, Sell, etc.)
+            trends = finnhub_client.recommendation_trends(symbol)
+            if trends:
+                latest = trends[0] # Get most recent month
+                ratings_list.append({
+                    "Symbol": symbol,
+                    "Buy": latest['buy'],
+                    "Hold": latest['hold'],
+                    "Sell": latest['sell'],
+                    "Strong Buy": latest['strongBuy'],
+                    "Period": latest['period']
+                })
+        except:
             continue
+            
+    return pd.DataFrame(ratings_list), pd.DataFrame(earnings_list)
             
     ratings_df = pd.concat(ratings_list) if ratings_list else pd.DataFrame()
     earnings_df = pd.DataFrame(earnings_list)
