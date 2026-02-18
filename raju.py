@@ -151,31 +151,48 @@ def fetch_finviz_news():
         return pd.DataFrame(News().get_news().get('news', []))[:10]
     except:
         return pd.DataFrame()
-
 @st.cache_data(ttl=3600)
-def fetch_earnings_and_ratings():
-    earnings, ratings = [], []
-    for label, sym in ALL_TICKERS.items():
+def fetch_earnings_and_ratings(days_window=7):
+    earnings_list = []
+    ratings_list = []
+    today = datetime.date.today()
+    
+    for label, symbol in ALL_TICKERS.items():
         try:
-            tk = yf.Ticker(sym)
-            # Analyst
-            rec = tk.recommendations
-            if rec is not None and not rec.empty:
-                latest = rec.tail(5).copy()
-                latest['Symbol'] = sym
+            ticker = yf.Ticker(symbol)
+            
+            # 1. Analyst Ratings with Price Targets
+            recs = ticker.recommendations
+            if recs is not None and not recs.empty:
+                latest = recs.tail(10).copy()
+                latest['Symbol'] = symbol
+                # Filter for Tier 1 Banks
                 latest = latest[latest['Firm'].str.contains('|'.join(TIER_1_BANKS), case=False, na=False)]
-                if not latest.empty:
-                    ratings.append(latest)
-            # Earnings
-            cal = tk.calendar
-            if cal is not None and not cal.empty and 'Earnings Date' in cal.columns:
-                e_date = pd.to_datetime(cal['Earnings Date'].iloc[0]).date()
-                if e_date in (datetime.date.today(), datetime.date.today() - datetime.timedelta(days=1)):
-                    sent = max([analyze_sentiment(n.get('title','')) for n in tk.news[:3]], key=lambda x: [analyze_sentiment(n.get('title','')) for n in tk.news[:3]].count(x)) if tk.news else "⚖️ Neutral"
-                    earnings.append({"Asset": label, "Symbol": sym, "Date": e_date, "Sentiment": sent})
+                ratings_list.append(latest)
+
+            # 2. Dynamic Earnings Check
+            cal = ticker.calendar
+            if cal is not None and 'Earnings Date' in cal:
+                # Some symbols return a list of potential dates
+                e_dates = cal['Earnings Date']
+                for e_dt in e_dates:
+                    e_date = e_dt.date()
+                    # Check if date is within the dynamic window (plus or minus)
+                    if abs((e_date - today).days) <= days_window:
+                        news = ticker.news[:3]
+                        sent = analyze_sentiment(news[0].get('title', '')) if news else "⚖️ Neutral"
+                        earnings_list.append({
+                            "Asset": label,
+                            "Symbol": symbol,
+                            "Earnings Date": e_date,
+                            "Sentiment": sent,
+                            "Status": "Upcoming" if e_date >= today else "Reported"
+                        })
         except:
             continue
-    return (pd.concat(ratings) if ratings else pd.DataFrame(), pd.DataFrame(earnings))
+            
+    return (pd.concat(ratings_list) if ratings_list else pd.DataFrame()), pd.DataFrame(earnings_list)
+
 
 @st.cache_data(ttl=300, show_spinner="Fetching options chains...")
 def get_options_pcr():
@@ -359,32 +376,33 @@ with tab4:
 with tab5:
     st.subheader("🎯 Market Moving Events")
     
-    # Ensure this function is called once at the start of the tab
-    ratings_df, earnings_df = fetch_earnings_and_ratings()
+    # Dynamic Control for the timeframe
+    days_range = st.slider("Select Earnings/Analyst Window (Days)", 1, 30, 7)
+    
+    ratings_df, earnings_df = fetch_earnings_and_ratings(days_window=days_range)
     
     col_e, col_r = st.columns(2)
     
     with col_e:
-        st.markdown("### 📅 Recent/Upcoming Earnings")
+        st.write(f"**Earnings (±{days_range} Days)**")
         if not earnings_df.empty:
-            # Use dataframe instead of table for a cleaner look
+            # Sort by date so soonest is first
+            earnings_df = earnings_df.sort_values("Earnings Date")
             st.dataframe(earnings_df, use_container_width=True, hide_index=True)
         else:
-            st.info("No earnings found for tracked tickers in the 48h window.")
+            st.info(f"No earnings found in the {days_range} day window.")
             
     with col_r:
-        st.markdown("### 🏦 Tier 1 Analyst Moves")
+        st.write("**Tier 1 Analyst Moves & Targets**")
         if not ratings_df.empty:
-            # Added 'Price Target' to the display columns
-            # Note: Ensure your fetch function includes 'Price Target' if available
-            cols_to_show = ['Symbol', 'Firm', 'To Grade', 'From Grade']
-            if 'Price Target' in ratings_df.columns:
-                cols_to_show.append('Price Target')
-                
+            # We look for common target price column names in yfinance
+            target_cols = [c for c in ['Target Price', 'Price Target', 'New Target'] if c in ratings_df.columns]
+            display_cols = ['Symbol', 'Firm', 'To Grade'] + target_cols
+            
             st.dataframe(
-                ratings_df[cols_to_show].tail(10), 
+                ratings_df[display_cols].tail(15), 
                 use_container_width=True, 
                 hide_index=True
             )
         else:
-            st.info("No Tier 1 analyst changes detected for tracked tickers today.")
+            st.info("No Tier 1 analyst changes detected in this window.")
