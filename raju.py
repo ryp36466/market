@@ -15,7 +15,7 @@ def check_password():
             st.session_state["password_correct"] = True
             del st.session_state["password"]
         else:
-            st.session_state["password_correct"] = Falseif "password_correct" not in st.session_state:
+            st.session_state["password_correct"] = Falseif ["password_correct"] not in st.session_state:
     st.title(" Pro Market Access")
     st.text_input("Enter Password", type="password", on_change=password_entered, key="password")
     return False
