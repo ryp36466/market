@@ -117,25 +117,46 @@ def fetch_all_market_data():
     tickers_list = list(ALL_TICKERS.values())
     ticker_to_label = {v: k for k, v in ALL_TICKERS.items()}
 
+    # Fetch daily data for RVOL calculations
     daily = yf.download(tickers=tickers_list, period="60d", interval="1d", progress=False)
-    intra = yf.download(tickers=tickers_list, period="1d", interval="5m", prepost=True, progress=False)
+    
+    # Calculate SPY RVOL as benchmark
+    try:
+        spy_vol_today = daily['Volume']['SPY'].iloc[-1]
+        spy_vol_avg = daily['Volume']['SPY'].iloc[-22:-1].mean()
+        spy_rvol = spy_vol_today / spy_vol_avg if spy_vol_avg > 0 else 1.0
+    except:
+        spy_rvol = 1.0
 
     rows = []
     for t in tickers_list:
         label = ticker_to_label.get(t, t)
         try:
-            prev_close = daily['Close'][t].dropna().iloc[-2] if len(daily['Close'][t].dropna()) >= 2 else np.nan
-            price = intra['Close'][t].dropna().iloc[-1] if not intra['Close'][t].dropna().empty else daily['Close'][t].iloc[-1]
+            # Price and Change
+            closes = daily['Close'][t].dropna()
+            price = closes.iloc[-1]
+            prev_close = closes.iloc[-2]
+            change = (price - prev_close) / prev_close * 100 if prev_close != 0 else np.nan
 
-            change = (price - prev_close) / prev_close * 100 if not np.isnan(prev_close) and prev_close != 0 else np.nan
+            # Volume Logic (Robust daily comparison)
+            vols = daily['Volume'][t].dropna()
+            day_vol = vols.iloc[-1]
+            avg_vol = vols.iloc[-22:-1].mean()
+            rel_vol = day_vol / avg_vol if avg_vol > 0 else np.nan
+            
+            # Market Relative Volume
+            mkt_rel_vol = rel_vol / spy_rvol if spy_rvol > 0 else np.nan
 
-            day_vol = intra['Volume'][t].sum() if 'Volume' in intra and t in intra['Volume'] else 0
-            avg_vol = daily['Volume'][t].dropna().iloc[-21:-1].mean() if len(daily['Volume'][t].dropna()) >= 21 else np.nan
-            rel_vol = day_vol / avg_vol if avg_vol and avg_vol > 0 else np.nan
-
-            rows.append({"Asset": label, "Symbol": t, "Price": price, "Change %": change, "Rel Vol": rel_vol})
+            rows.append({
+                "Asset": label, 
+                "Symbol": t, 
+                "Price": price, 
+                "Change %": change, 
+                "Rel Vol": rel_vol,
+                "Mkt Rel Vol": mkt_rel_vol
+            })
         except:
-            rows.append({"Asset": label, "Symbol": t, "Price": np.nan, "Change %": np.nan, "Rel Vol": np.nan})
+            rows.append({"Asset": label, "Symbol": t, "Price": np.nan, "Change %": np.nan, "Rel Vol": np.nan, "Mkt Rel Vol": np.nan})
     return pd.DataFrame(rows)
 
 @st.cache_data(ttl=300)
@@ -151,6 +172,7 @@ def fetch_finviz_news():
         return pd.DataFrame(News().get_news().get('news', []))[:10]
     except:
         return pd.DataFrame()
+
 @st.cache_data(ttl=3600)
 def fetch_earnings_and_ratings(days_window=7):
     earnings_list = []
@@ -173,11 +195,9 @@ def fetch_earnings_and_ratings(days_window=7):
             # 2. Dynamic Earnings Check
             cal = ticker.calendar
             if cal is not None and 'Earnings Date' in cal:
-                # Some symbols return a list of potential dates
                 e_dates = cal['Earnings Date']
                 for e_dt in e_dates:
                     e_date = e_dt.date()
-                    # Check if date is within the dynamic window (plus or minus)
                     if abs((e_date - today).days) <= days_window:
                         news = ticker.news[:3]
                         sent = analyze_sentiment(news[0].get('title', '')) if news else "⚖️ Neutral"
@@ -192,7 +212,6 @@ def fetch_earnings_and_ratings(days_window=7):
             continue
             
     return (pd.concat(ratings_list) if ratings_list else pd.DataFrame()), pd.DataFrame(earnings_list)
-
 
 @st.cache_data(ttl=300, show_spinner="Fetching options chains...")
 def get_options_pcr():
@@ -224,9 +243,9 @@ def color_pct(val):
 
 def color_rel(val):
     if pd.isna(val): return ''
-    if val > 2.0: return 'background-color: #90ee90; font-weight: bold'
-    if val > 1.5: return 'background-color: #98fb98'
-    if val < 0.5: return 'background-color: #ffb6c1'
+    if val > 2.0: return 'background-color: #90ee90; color: #000000; font-weight: bold'
+    if val > 1.5: return 'background-color: #98fb98; color: #000000'
+    if val < 0.5: return 'background-color: #ffb6c1; color: #000000'
     return ''
 
 # ========================== SIDEBAR ==========================
@@ -270,10 +289,8 @@ top_losers  = full_market.nsmallest(6, 'Change %')
 
 # Mover news
 mover_sent = {}
-mover_news = {}
 for _, row in pd.concat([top_gainers, top_losers]).drop_duplicates('Asset').iterrows():
     items = get_ticker_news(row['Symbol'])
-    mover_news[row['Asset']] = items
     if not items:
         mover_sent[row['Asset']] = "❓ No News"
     else:
@@ -314,7 +331,7 @@ with tab1:
     st.subheader("Major Markets & Indices")
     st.dataframe(
         global_df.drop(columns=['Symbol']).style
-            .format({"Price": "{:.2f}", "Change %": "{:+.2f}%", "Rel Vol": "{:.2f}x"})
+            .format({"Price": "{:.2f}", "Change %": "{:+.2f}%", "Rel Vol": "{:.2f}x", "Mkt Rel Vol": "{:.2f}x"})
             .map(color_pct, subset=["Change %"])
             .map(color_rel, subset=["Rel Vol"]),
         use_container_width=True, hide_index=True
@@ -328,7 +345,7 @@ with tab2:
             st.subheader(name)
             st.dataframe(
                 df.drop(columns=['Symbol']).style
-                    .format({"Price": "{:.2f}", "Change %": "{:+.2f}%", "Rel Vol": "{:.2f}x", "RS": "{:+.2f}"})
+                    .format({"Price": "{:.2f}", "Change %": "{:+.2f}%", "Rel Vol": "{:.2f}x", "RS": "{:+.2f}", "Mkt Rel Vol": "{:.2f}x"})
                     .map(color_pct, subset=["Change %","RS"])
                     .map(color_rel, subset=["Rel Vol"]),
                 use_container_width=True, hide_index=True
@@ -348,14 +365,14 @@ with tab3:
         data = yf.Ticker(ALL_TICKERS[lab]).history(period="1d", interval="5m")
         if not data.empty:
             st.write(f"**{lab}**")
-            st.line_chart(data['Close'].tz_convert('US/Eastern'))
+            st.line_chart(data['Close'])
 
 with tab4:
     st.subheader("Options Sentiment (PCR)")
-    st.caption("Put/Call Ratio • <0.8 Bullish • >1.1 Bearish • nearest 5 expirations")
-    data = get_options_pcr()
+    st.caption("Put/Call Ratio • <0.8 Bullish • >1.1 Bearish")
+    data_pcr = get_options_pcr()
     cols = st.columns(5)
-    for i, (label, info) in enumerate(data.items()):
+    for i, (label, info) in enumerate(data_pcr.items()):
         c = cols[i % 5]
         if "error" in info:
             c.error(f"{label}\n{info['error']}")
@@ -364,8 +381,8 @@ with tab4:
                      help=f"Call: {info['call_vol']:,} • Put: {info['put_vol']:,}")
 
     # Aggregate
-    tc = sum(d.get("call_vol",0) for d in data.values() if "error" not in d)
-    tp = sum(d.get("put_vol",0) for d in data.values() if "error" not in d)
+    tc = sum(d.get("call_vol",0) for d in data_pcr.values() if "error" not in d)
+    tp = sum(d.get("put_vol",0) for d in data_pcr.values() if "error" not in d)
     ap = tp / tc if tc else 0
     col1, col2 = st.columns([1,3])
     col1.metric("Aggregate PCR", f"{ap:.2f}")
@@ -375,34 +392,23 @@ with tab4:
 
 with tab5:
     st.subheader("🎯 Market Moving Events")
-    
-    # Dynamic Control for the timeframe
-    days_range = st.slider("Select Earnings/Analyst Window (Days)", 1, 30, 7)
+    days_range = st.slider("Select Window (Days)", 1, 30, 7)
     
     ratings_df, earnings_df = fetch_earnings_and_ratings(days_window=days_range)
     
-    col_e, col_r = st.columns(2)
-    
-    with col_e:
+    ce, cr = st.columns(2)
+    with ce:
         st.write(f"**Earnings (±{days_range} Days)**")
         if not earnings_df.empty:
-            # Sort by date so soonest is first
-            earnings_df = earnings_df.sort_values("Earnings Date")
-            st.dataframe(earnings_df, use_container_width=True, hide_index=True)
+            st.dataframe(earnings_df.sort_values("Earnings Date"), use_container_width=True, hide_index=True)
         else:
-            st.info(f"No earnings found in the {days_range} day window.")
+            st.info("No earnings found in this window.")
             
-    with col_r:
+    with cr:
         st.write("**Tier 1 Analyst Moves & Targets**")
         if not ratings_df.empty:
-            # We look for common target price column names in yfinance
             target_cols = [c for c in ['Target Price', 'Price Target', 'New Target'] if c in ratings_df.columns]
             display_cols = ['Symbol', 'Firm', 'To Grade'] + target_cols
-            
-            st.dataframe(
-                ratings_df[display_cols].tail(15), 
-                use_container_width=True, 
-                hide_index=True
-            )
+            st.dataframe(ratings_df[display_cols].tail(15), use_container_width=True, hide_index=True)
         else:
-            st.info("No Tier 1 analyst changes detected in this window.")
+            st.info("No Tier 1 analyst changes detected.")
