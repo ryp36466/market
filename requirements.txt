@@ -2,8 +2,8 @@ streamlit
 yfinance
 pandas
 numpy
+scipy
+matplotlib
 streamlit-autorefresh
-pytz
-requests
-finnhub-python
 finvizfinance
+pytz
