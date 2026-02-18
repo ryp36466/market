@@ -15,18 +15,22 @@ def check_password():
             st.session_state["password_correct"] = True
             del st.session_state["password"]
         else:
-            st.session_state["password_correct"] = False 
+            st.session_state["password_correct"] = False
+
     if "password_correct" not in st.session_state:
-     st.title(" Pro Market Access")
-     st.text_input("Enter Password", type="password", on_change=password_entered, key="password")
-    return False
-else if not st.session_state["password_correct"]:
-    st.text_input("Enter Password", type="password", on_change=password_entered, key="password")
-    st.error(" Access Denied")
-    return False
-else:
-    return True if not check_password():
-    st.stop()# ========================== TICKERS ==========================
+        st.title("🔐 Pro Market Access")
+        st.text_input("Enter Password", type="password", on_change=password_entered, key="password")
+        return False
+    elif not st.session_state["password_correct"]:
+        st.text_input("Enter Password", type="password", on_change=password_entered, key="password")
+        st.error("😕 Access Denied")
+        return False
+    else:
+        return True
+
+if not check_password():
+    st.stop()
+# ========================== TICKERS ==========================
 GLOBAL_TICKERS = {
     "S&P 500 Futures (ES)": "ES=F",
     "Nasdaq 100 Futures (NQ)": "NQ=F",
