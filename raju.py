@@ -6,7 +6,8 @@ from streamlit_autorefresh import st_autorefresh
 import datetime
 import pytz
 from finvizfinance.news import News
-
+import matplotlib.pyplot as plt
+from scipy.stats import norm
 # ========================== PAGE CONFIG ==========================
 st.set_page_config(page_title="Pro Market Terminal", page_icon="🏛️", layout="wide")
 
@@ -33,6 +34,22 @@ def check_password():
 if not check_password():
     st.stop()
 
+
+def calc_gamma(S, K, T, v, r, q, cp_flag, OI):
+    if T <= 0 or v <= 0:
+        return 0
+    d1 = (np.log(S/K) + (r - q + 0.5 * v**2) * T) / (v * np.sqrt(T))
+    gamma = np.exp(-q * T) * norm.pdf(d1) / (S * v * np.sqrt(T))
+    val = (OI * 100) * (S**2) * 0.01 * gamma
+    return val if cp_flag == 'call' else -val
+    
+def calc_gamma(S, K, T, v, r, q, cp_flag, OI):
+    if T <= 0 or v <= 0:
+        return 0
+    d1 = (np.log(S/K) + (r - q + 0.5 * v**2) * T) / (v * np.sqrt(T))
+    gamma = np.exp(-q * T) * norm.pdf(d1) / (S * v * np.sqrt(T))
+    val = (OI * 100) * (S**2) * 0.01 * gamma
+    return val if cp_flag == 'call' else -val
 # ========================== TICKERS ==========================
 GLOBAL_TICKERS = {
     "S&P 500 Futures (ES)": "ES=F",
@@ -319,7 +336,8 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📈 Sectors, ETFs, 24h & Mag7",
     "📊 Relative Strength & Charts",
     "⚖️ Options Sentiment",
-    "🎯 Analyst & Earnings"
+    "🎯 Analyst & Earnings",
+    "📉 Gamma Exposure"
 ])
 
 with tab1:
@@ -422,3 +440,46 @@ with tab5:
             st.dataframe(ratings_df[display_cols].tail(15), use_container_width=True, hide_index=True)
         else:
             st.info("No Tier 1 analyst changes detected in this window.")
+with tab6:
+    st.subheader("Gamma Exposure (GEX) Profile")
+    gex_ticker = st.selectbox("Select Ticker for GEX", ["SPY", "QQQ", "NVDA", "AAPL", "TSLA"])
+    
+    with st.spinner(f"Calculating GEX for {gex_ticker}..."):
+        tk, spot, expirations = get_gex_data(gex_ticker)
+        
+        if tk and expirations:
+            all_opts = []
+            for exp in expirations[:3]: # First 3 expiries for speed
+                chain = tk.option_chain(exp)
+                c, p = chain.calls, chain.puts
+                c['type'], p['type'] = 'call', 'put'
+                c['exp'], p['exp'] = exp, exp
+                all_opts.append(pd.concat([c, p]))
+            
+            df_gex = pd.concat(all_opts)
+            df_gex['dte'] = (pd.to_datetime(df_gex['exp']) - datetime.datetime.now()).dt.days / 365
+            df_gex['dte'] = df_gex['dte'].clip(lower=1/365)
+            
+            df_gex['GEX'] = df_gex.apply(lambda r: calc_gamma(
+                spot, r['strike'], r['dte'], r['impliedVolatility'], 0.04, 0.01, r['type'], r['openInterest']
+            ), axis=1)
+            
+            # Charting
+            df_agg = df_gex.groupby('strike')['GEX'].sum() / 10**6
+            fig, ax = plt.subplots(figsize=(10, 4))
+            # Match your terminal's dark theme if desired
+            fig.patch.set_facecolor('#0e1117')
+            ax.set_facecolor('#0e1117')
+            ax.tick_params(colors='white')
+            ax.xaxis.label.set_color('white')
+            ax.yaxis.label.set_color('white')
+            
+            ax.bar(df_agg.index, df_agg.values, width=(spot*0.004), color='#00d4ff', alpha=0.8)
+            ax.axvline(spot, color='#ff4b4b', linestyle='--', label=f'Spot: {spot:.2f}')
+            ax.set_xlim(spot * 0.95, spot * 1.05)
+            ax.set_ylabel("GEX ($ Millions)")
+            st.pyplot(fig)
+            
+            st.info("💡 **Gamma Exposure** shows where market makers are forced to buy or sell as the underlying moves. Large spikes often act as magnets or support/resistance.")
+        else:
+            st.error("Could not fetch options data for this ticker.")
