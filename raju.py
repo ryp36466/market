@@ -6,7 +6,8 @@ from streamlit_autorefresh import st_autorefresh
 import datetime
 import pytz
 from finvizfinance.news import News# ========================== PAGE CONFIG ==========================
-st.set_page_config(page_title="Pro Market Terminal", page_icon="", layout="wide")def check_password():
+st.set_page_config(page_title="Pro Market Terminal", page_icon="", layout="wide")
+def check_password():
     def password_entered():
         if st.session_state["password"] == "Pratimap9!@":
             st.session_state["password_correct"] = True
