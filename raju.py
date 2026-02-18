@@ -10,7 +10,8 @@ from finvizfinance.news import News
 
 # ========================== PAGE CONFIG ==========================
 st.set_page_config(page_title="Pro Market Terminal", page_icon="🏛️", layout="wide")
-finnhub_client = finnhub.Client(api_key='d6au4n9r01qnr27itio0d6au4n9r01qnr27itiog')
+FINNHUB_KEY = "d6au4n9r01qnr27itio0d6au4n9r01qnr27itiog"
+finnhub_client = finnhub.Client(api_key=FINNHUB_KEY)
 # ========================== PASSWORD PROTECTION ==========================
 def check_password():
     def password_entered():
