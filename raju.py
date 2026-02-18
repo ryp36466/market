@@ -470,13 +470,14 @@ with tab6:
                 df_agg = df_gex.groupby('strike')['GEX'].sum() / 1e6
                 
                 # --- CALCULATIONS (STRICT FILTER FOR ACCURACY) ---
-                # Search for the Flip only within 5% of the spot price
+                # Search for the Flip Level only within 5% of the spot price
+                # This prevents far-away strikes from giving fake bearish signals
                 df_near_price = df_agg[(df_agg.index > spot * 0.95) & (df_agg.index < spot * 1.05)]
                 
                 if not df_near_price.empty:
                     gamma_flip = df_near_price.index[np.abs(df_near_price.values).argmin()]
                 else:
-                    # Fallback to a 10% range if 5% is empty
+                    # Fallback to a 10% range if the 5% range is empty
                     df_wider = df_agg[(df_agg.index > spot * 0.90) & (df_agg.index < spot * 1.10)]
                     gamma_flip = df_wider.index[np.abs(df_wider.values).argmin()] if not df_wider.empty else df_agg.index[0]
                 
