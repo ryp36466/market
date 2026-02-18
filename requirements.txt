@@ -1,9 +1,9 @@
 streamlit
+yfinance
 pandas
 numpy
-yfinance
 streamlit-autorefresh
-finvizfinance
-plotly
+pytz
 requests
-beautifulsoup4
+finnhub-python
+finvizfinance
