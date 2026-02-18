@@ -5,9 +5,11 @@ import numpy as np
 from streamlit_autorefresh import st_autorefresh
 import datetime
 import pytz
+import requests
 from finvizfinance.news import News
 import matplotlib.pyplot as plt
 from scipy.stats import norm
+
 # ========================== PAGE CONFIG ==========================
 st.set_page_config(page_title="Pro Market Terminal", page_icon="🏛️", layout="wide")
 
@@ -34,22 +36,15 @@ def check_password():
 if not check_password():
     st.stop()
 
+# ========================== GAMMA CALCULATION ==========================
+def calc_gamma(S, K, T, v, r, q, cp_flag, OI):
+    if T <= 0 or v <= 0:
+        return 0
+    d1 = (np.log(S / K) + (r - q + 0.5 * v**2) * T) / (v * np.sqrt(T))
+    gamma = np.exp(-q * T) * norm.pdf(d1) / (S * v * np.sqrt(T))
+    val = (OI * 100) * (S**2) * 0.01 * gamma
+    return val if cp_flag == 'call' else -val
 
-def calc_gamma(S, K, T, v, r, q, cp_flag, OI):
-    if T <= 0 or v <= 0:
-        return 0
-    d1 = (np.log(S/K) + (r - q + 0.5 * v**2) * T) / (v * np.sqrt(T))
-    gamma = np.exp(-q * T) * norm.pdf(d1) / (S * v * np.sqrt(T))
-    val = (OI * 100) * (S**2) * 0.01 * gamma
-    return val if cp_flag == 'call' else -val
-    
-def calc_gamma(S, K, T, v, r, q, cp_flag, OI):
-    if T <= 0 or v <= 0:
-        return 0
-    d1 = (np.log(S/K) + (r - q + 0.5 * v**2) * T) / (v * np.sqrt(T))
-    gamma = np.exp(-q * T) * norm.pdf(d1) / (S * v * np.sqrt(T))
-    val = (OI * 100) * (S**2) * 0.01 * gamma
-    return val if cp_flag == 'call' else -val
 # ========================== TICKERS ==========================
 GLOBAL_TICKERS = {
     "S&P 500 Futures (ES)": "ES=F",
@@ -63,50 +58,29 @@ GLOBAL_TICKERS = {
 }
 
 SECTOR_TICKERS = {
-    "Technology (XLK)": "XLK",
-    "Financials (XLF)": "XLF",
-    "Energy (XLE)": "XLE",
-    "Healthcare (XLV)": "XLV",
-    "Consumer Disc (XLY)": "XLY",
-    "Industrials (XLI)": "XLI",
-    "Utilities (XLU)": "XLU",
-    "Real Estate (XLRE)": "XLRE",
-    "Consumer Staples (XLP)": "XLP",
+    "Technology (XLK)": "XLK", "Financials (XLF)": "XLF", "Energy (XLE)": "XLE",
+    "Healthcare (XLV)": "XLV", "Consumer Disc (XLY)": "XLY", "Industrials (XLI)": "XLI",
+    "Utilities (XLU)": "XLU", "Real Estate (XLRE)": "XLRE", "Consumer Staples (XLP)": "XLP",
     "Materials (XLB)": "XLB"
 }
 
 ETF_TICKERS = {
-    "Bitcoin ETF (IBIT)": "IBIT",
-    "Gold ETF (GLD)": "GLD",
-    "Silver (SLV)": "SLV",
-    "Bonds 20Y+ (TLT)": "TLT",
-    "Semis (SMH)": "SMH",
-    "Ark Innovation (ARKK)": "ARKK"
+    "Bitcoin ETF (IBIT)": "IBIT", "Gold ETF (GLD)": "GLD", "Silver (SLV)": "SLV",
+    "Bonds 20Y+ (TLT)": "TLT", "Semis (SMH)": "SMH", "Ark Innovation (ARKK)": "ARKK"
 }
 
 TWENTYFOUR_TICKERS = {
-    "Bitcoin 24h (BTC-USD)": "BTC-USD",
-    "Ethereum (ETH-USD)": "ETH-USD",
-    "Gold Futures (GC)": "GC=F",
-    "Crude Oil (CL)": "CL=F"
+    "Bitcoin 24h (BTC-USD)": "BTC-USD", "Ethereum (ETH-USD)": "ETH-USD",
+    "Gold Futures (GC)": "GC=F", "Crude Oil (CL)": "CL=F"
 }
 
 MAG7_TICKERS = {
-    "Apple (AAPL)": "AAPL",
-    "Microsoft (MSFT)": "MSFT",
-    "Nvidia (NVDA)": "NVDA",
-    "Amazon (AMZN)": "AMZN",
-    "Alphabet (GOOGL)": "GOOGL",
-    "Meta (META)": "META",
+    "Apple (AAPL)": "AAPL", "Microsoft (MSFT)": "MSFT", "Nvidia (NVDA)": "NVDA",
+    "Amazon (AMZN)": "AMZN", "Alphabet (GOOGL)": "GOOGL", "Meta (META)": "META",
     "Tesla (TSLA)": "TSLA"
 }
 
-OPTIONS_TICKERS = {
-    **MAG7_TICKERS,
-    "SPY (S&P 500 ETF)": "SPY",
-    "QQQ (Nasdaq 100 ETF)": "QQQ",
-    "VIX": "^VIX"
-}
+OPTIONS_TICKERS = {**MAG7_TICKERS, "SPY (S&P 500 ETF)": "SPY", "QQQ (Nasdaq 100 ETF)": "QQQ", "VIX": "^VIX"}
 
 TIER_1_BANKS = [
     "Goldman Sachs", "Morgan Stanley", "JPMorgan Chase", "JP Morgan",
@@ -114,8 +88,7 @@ TIER_1_BANKS = [
     "Wells Fargo", "Deutsche Bank", "Credit Suisse"
 ]
 
-ALL_TICKERS = {**GLOBAL_TICKERS, **SECTOR_TICKERS, **ETF_TICKERS,
-               **TWENTYFOUR_TICKERS, **MAG7_TICKERS}
+ALL_TICKERS = {**GLOBAL_TICKERS, **SECTOR_TICKERS, **ETF_TICKERS, **TWENTYFOUR_TICKERS, **MAG7_TICKERS}
 
 # ========================== HELPERS ==========================
 def analyze_sentiment(text):
@@ -147,7 +120,7 @@ def fetch_all_market_data():
             prev_close = daily['Close'][t].dropna().iloc[-2] if len(daily['Close'][t].dropna()) >= 2 else np.nan
             price = intra['Close'][t].dropna().iloc[-1] if not intra['Close'][t].dropna().empty else daily['Close'][t].iloc[-1]
 
-            change = (price - prev_close) / prev_close * 100 if not np.isnan(prev_close) and prev_close != 0 else np.nan
+            change = (price - prev_close) / prev_close * 100 if pd.notna(prev_close) and prev_close != 0 else np.nan
 
             day_vol = intra['Volume'][t].sum() if 'Volume' in intra and t in intra['Volume'] else 0
             avg_vol = daily['Volume'][t].dropna().iloc[-21:-1].mean() if len(daily['Volume'][t].dropna()) >= 21 else np.nan
@@ -168,7 +141,8 @@ def get_ticker_news(symbol):
 @st.cache_data(ttl=600)
 def fetch_finviz_news():
     try:
-        return pd.DataFrame(News().get_news().get('news', []))[:10]
+        fnews = News()
+        return pd.DataFrame(fnews.get_news().get('news', []))[:10]
     except Exception:
         return pd.DataFrame()
 
@@ -188,30 +162,29 @@ def fetch_earnings_and_ratings(days_window=7):
                 latest = recs.tail(10).copy()
                 latest['Symbol'] = symbol
                 latest = latest[latest['Firm'].str.contains('|'.join(TIER_1_BANKS), case=False, na=False)]
-                ratings_list.append(latest)
+                if not latest.empty:
+                    ratings_list.append(latest)
 
-            # Earnings calendar
+            # Earnings
             cal = ticker.calendar
-            if cal is not None and 'Earnings Date' in cal:
-                e_dates = cal['Earnings Date']
-                if not isinstance(e_dates, list):
-                    e_dates = [e_dates]
+            if cal is not None and not cal.empty and 'Earnings Date' in cal.columns:
+                e_dates = cal['Earnings Date'].dropna()
                 for e_dt in e_dates:
-                    e_date = e_dt.date() if hasattr(e_dt, 'date') else e_dt
+                    e_date = e_dt.date() if hasattr(e_dt, 'date') else pd.to_datetime(e_dt).date()
                     if abs((e_date - today).days) <= days_window:
                         news = ticker.news[:3]
-                        sent = analyze_sentiment(news[0].get('title', '') if news else "")
+                        title = news[0].get('title', '') if news else ""
                         earnings_list.append({
                             "Asset": label,
                             "Symbol": symbol,
                             "Earnings Date": e_date,
-                            "Sentiment": sent,
+                            "Sentiment": analyze_sentiment(title),
                             "Status": "Upcoming" if e_date >= today else "Reported"
                         })
         except Exception:
             continue
             
-    ratings_df = pd.concat(ratings_list) if ratings_list else pd.DataFrame()
+    ratings_df = pd.concat(ratings_list, ignore_index=True) if ratings_list else pd.DataFrame()
     earnings_df = pd.DataFrame(earnings_list)
     return ratings_df, earnings_df
 
@@ -238,6 +211,20 @@ def get_options_pcr():
             res[label] = {"error": str(e)}
     return res
 
+# ========================== GEX DATA ==========================
+@st.cache_data(ttl=600)
+def get_gex_data(symbol):
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    })
+    tk = yf.Ticker(symbol, session=session)
+    hist = tk.history(period="1d")
+    if hist.empty:
+        return None, None, None
+    spot = hist['Close'].iloc[-1]
+    return tk, spot, tk.options
+
 # ========================== STYLING ==========================
 def color_pct(val):
     if pd.isna(val):
@@ -263,13 +250,14 @@ if not news_data.empty:
     for _, r in news_data.iterrows():
         with st.sidebar.expander(f"{r['Source']} | {r['Date']}"):
             st.write(r['Title'])
-            if r.get('url') or r.get('URL'):
-                st.markdown(f"[Read]({r.get('url') or r.get('URL')})")
+            url = r.get('url') or r.get('URL')
+            if url:
+                st.markdown(f"[Read]({url})")
 else:
     st.sidebar.info("News unavailable")
 
 st.sidebar.title("🏛️ Market Settings")
-refresh = st.sidebar.number_input('Refresh rate (sec)', 15, 600, 30)
+refresh = st.sidebar.number_input('Refresh rate (sec)', 15, 600, 30, step=15)
 st_autorefresh(interval=refresh * 1000, key="refresh")
 
 # ========================== DATA FETCHING ==========================
@@ -294,7 +282,6 @@ for df in [sector_df, etf_df, tf_df, mag7_df]:
 top_gainers = full_market.nlargest(6, 'Change %')
 top_losers = full_market.nsmallest(6, 'Change %')
 
-# Mover news & sentiment
 mover_sent = {}
 for _, row in pd.concat([top_gainers, top_losers]).drop_duplicates('Asset').iterrows():
     items = get_ticker_news(row['Symbol'])
@@ -326,30 +313,16 @@ with c2:
 
 with c3:
     up = len(full_market[full_market['Change %'] > 0])
-    st.metric("Breadth", f"{up} ↑ / {len(full_market) - up} ↓", delta=up - (len(full_market) - up))
+    total = len(full_market)
+    st.metric("Breadth", f"{up} ↑ / {total - up} ↓", delta=up - (total - up))
 
 st.divider()
-@st.cache_data(ttl=600)
-def get_gex_data(symbol):
-    import requests
-    # Create a custom session with a browser-like User-Agent
-    session = requests.Session()
-    session.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    })
-    
-    tk = yf.Ticker(symbol, session=session) # Use the session here
-    hist = tk.history(period="1d")
-    if hist.empty: 
-        return None, None, None
-    spot = hist['Close'].iloc[-1]
-    return tk, spot, tk.options
-# Tabs
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([ # <--- Fixed: Added tab6
-    "🌎 Global Indices", 
-    "📈 Sectors, ETFs, 24h & Mag7", 
-    "📊 Relative Strength & Charts", 
-    "⚖️ Options Sentiment", 
+
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    "🌎 Global Indices",
+    "📈 Sectors, ETFs, 24h & Mag7",
+    "📊 Relative Strength & Charts",
+    "⚖️ Options Sentiment",
     "🎯 Analyst & Earnings",
     "📉 Gamma Exposure"
 ])
@@ -373,13 +346,11 @@ with tab2:
     ):
         with col:
             st.subheader(name)
-            st.dataframe(
-                df.drop(columns=['Symbol']).style
-                    .format({"Price": "{:.2f}", "Change %": "{:+.2f}%", "Rel Vol": "{:.2f}x", "RS": "{:+.2f}"})
-                    .applymap(color_pct, subset=["Change %", "RS"])
-                    .applymap(color_rel, subset=["Rel Vol"]),
-                use_container_width=True, hide_index=True
-            )
+            styled = df.drop(columns=['Symbol']).style \
+                .format({"Price": "{:.2f}", "Change %": "{:+.2f}%", "Rel Vol": "{:.2f}x", "RS": "{:+.2f}%"}) \
+                .applymap(color_pct, subset=["Change %", "RS"]) \
+                .applymap(color_rel, subset=["Rel Vol"])
+            st.dataframe(styled, use_container_width=True, hide_index=True)
 
 with tab3:
     st.subheader("Relative Strength vs SPY")
@@ -421,7 +392,7 @@ with tab4:
 
     tc = sum(d.get("call_vol", 0) for d in data.values() if "error" not in d)
     tp = sum(d.get("put_vol", 0) for d in data.values() if "error" not in d)
-    ap = tp / tc if tc else 0
+    ap = tp / tc if tc > 0 else 0
     col1, col2 = st.columns([1, 3])
     col1.metric("Aggregate PCR", f"{ap:.2f}")
     if ap < 0.80:
@@ -442,58 +413,66 @@ with tab5:
         st.write(f"**Earnings (±{days_range} Days)**")
         if not earnings_df.empty:
             earnings_df = earnings_df.sort_values("Earnings Date")
-            st.dataframe(earnings_df, use_container_width=True, hide_index=True)
+            st.dataframe(earnings_df.drop(columns=['Symbol']), use_container_width=True, hide_index=True)
         else:
-            st.info(f"No earnings found in the {days_range} day window.")
+            st.info(f"No earnings found in ±{days_range} day window.")
             
     with col_r:
         st.write("**Tier 1 Analyst Moves & Targets**")
         if not ratings_df.empty:
             target_cols = [c for c in ['Target Price', 'Price Target', 'New Target'] if c in ratings_df.columns]
-            display_cols = ['Symbol', 'Firm', 'To Grade'] + target_cols
-            st.dataframe(ratings_df[display_cols].tail(15), use_container_width=True, hide_index=True)
+            display_cols = ['Symbol', 'Firm', 'To Grade'] + target_cols + ['Action']
+            st.dataframe(ratings_df[display_cols].sort_values('Date', ascending=False).head(20),
+                         use_container_width=True, hide_index=True)
         else:
-            st.info("No Tier 1 analyst changes detected in this window.")
+            st.info("No Tier 1 analyst changes detected.")
+
 with tab6:
     st.subheader("Gamma Exposure (GEX) Profile")
-    gex_ticker = st.selectbox("Select Ticker for GEX", ["SPY", "QQQ", "NVDA", "AAPL", "TSLA"])
+    gex_ticker = st.selectbox("Select Ticker for GEX", ["SPY", "QQQ", "NVDA", "AAPL", "TSLA", "MSFT", "AMZN"])
     
     with st.spinner(f"Calculating GEX for {gex_ticker}..."):
         tk, spot, expirations = get_gex_data(gex_ticker)
         
         if tk and expirations:
             all_opts = []
-            for exp in expirations[:3]: # First 3 expiries for speed
+            for exp in expirations[:3]:
                 chain = tk.option_chain(exp)
-                c, p = chain.calls, chain.puts
-                c['type'], p['type'] = 'call', 'put'
-                c['exp'], p['exp'] = exp, exp
-                all_opts.append(pd.concat([c, p]))
+                calls, puts = chain.calls, chain.puts
+                calls['type'], puts['type'] = 'call', 'put'
+                calls['exp'], puts['exp'] = exp, exp
+                all_opts.append(pd.concat([calls, puts]))
             
             df_gex = pd.concat(all_opts)
-            df_gex['dte'] = (pd.to_datetime(df_gex['exp']) - datetime.datetime.now()).dt.days / 365
+            df_gex['dte'] = (pd.to_datetime(df_gex['exp']) - datetime.datetime.now()).dt.days / 365.0
             df_gex['dte'] = df_gex['dte'].clip(lower=1/365)
             
             df_gex['GEX'] = df_gex.apply(lambda r: calc_gamma(
                 spot, r['strike'], r['dte'], r['impliedVolatility'], 0.04, 0.01, r['type'], r['openInterest']
             ), axis=1)
             
-            # Charting
-            df_agg = df_gex.groupby('strike')['GEX'].sum() / 10**6
-            fig, ax = plt.subplots(figsize=(10, 4))
-            # Match your terminal's dark theme if desired
+            df_agg = df_gex.groupby('strike')['GEX'].sum() / 1e6
+            
+            fig, ax = plt.subplots(figsize=(12, 5))
             fig.patch.set_facecolor('#0e1117')
             ax.set_facecolor('#0e1117')
             ax.tick_params(colors='white')
             ax.xaxis.label.set_color('white')
             ax.yaxis.label.set_color('white')
+            ax.spines['bottom'].set_color('white')
+            ax.spines['top'].set_color('white')
+            ax.spines['left'].set_color('white')
+            ax.spines['right'].set_color('white')
             
-            ax.bar(df_agg.index, df_agg.values, width=(spot*0.004), color='#00d4ff', alpha=0.8)
-            ax.axvline(spot, color='#ff4b4b', linestyle='--', label=f'Spot: {spot:.2f}')
-            ax.set_xlim(spot * 0.95, spot * 1.05)
-            ax.set_ylabel("GEX ($ Millions)")
+            ax.bar(df_agg.index, df_agg.values, width=(spot * 0.004), color='#00d4ff', alpha=0.8)
+            ax.axvline(spot, color='#ff4b4b', linestyle='--', linewidth=2, label=f'Spot: {spot:.2f}')
+            ax.set_xlim(spot * 0.93, spot * 1.07)
+            ax.set_ylabel("GEX ($ Millions)", color='white')
+            ax.set_xlabel("Strike Price", color='white')
+            ax.legend(facecolor='#0e1117', labelcolor='white')
+            ax.grid(True, alpha=0.3)
             st.pyplot(fig)
             
-            st.info("💡 **Gamma Exposure** shows where market makers are forced to buy or sell as the underlying moves. Large spikes often act as magnets or support/resistance.")
+            st.info("💡 **Gamma Exposure** estimates dealer hedging pressure. Positive GEX = support on dips, negative = pressure on rallies. Large bars often act as magnets/support/resistance.")
         else:
             st.error("Could not fetch options data for this ticker.")
