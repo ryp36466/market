@@ -210,10 +210,10 @@ def get_options_pcr():
             res[label] = {"error": str(e)}
     return res
 
-# ========================== GEX DATA (FIXED: No custom session) ==========================
+# ========================== GEX DATA ==========================
 @st.cache_data(ttl=600)
 def get_gex_data(symbol):
-    tk = yf.Ticker(symbol)  # Let yfinance handle the session internally (uses curl_cffi)
+    tk = yf.Ticker(symbol)
     hist = tk.history(period="1d")
     if hist.empty:
         return None, None, None
@@ -262,7 +262,7 @@ time_now = datetime.datetime.now(est).strftime('%H:%M:%S')
 full_market = fetch_all_market_data().dropna(subset=['Change %'])
 
 global_df = full_market[full_market['Asset'].isin(GLOBAL_TICKERS.keys())].copy()
-sector_df = full_market[fullUpdate_market[full_market['Asset'].isin(SECTOR_TICKERS.keys())].copy()
+sector_df = full_market[full_market['Asset'].isin(SECTOR_TICKERS.keys())].copy()
 etf_df = full_market[full_market['Asset'].isin(ETF_TICKERS.keys())].copy()
 tf_df = full_market[full_market['Asset'].isin(TWENTYFOUR_TICKERS.keys())].copy()
 mag7_df = full_market[full_market['Asset'].isin(MAG7_TICKERS.keys())].copy()
@@ -432,7 +432,7 @@ with tab6:
         
         if tk and expirations:
             all_opts = []
-            for exp in expirations[:3]:  # Nearest 3 expiries
+            for exp in expirations[:3]:
                 try:
                     chain = tk.option_chain(exp)
                     calls, puts = chain.calls, chain.puts
@@ -441,7 +441,7 @@ with tab6:
                     calls['exp'] = exp
                     puts['exp'] = exp
                     all_opts.append(pd.concat([calls, puts]))
-                except:
+                except Exception:
                     continue
             
             if not all_opts:
