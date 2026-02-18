@@ -434,57 +434,58 @@ with tab6:
     gex_options = ["SPY", "QQQ", "NVDA", "AAPL", "TSLA", "MSFT", "AMZN", "META", "GOOGL"]
     gex_ticker = st.selectbox("Select Ticker for GEX", gex_options, index=0)
     
-    with st.spinner(f"Fetching Live Gamma for {gex_ticker}..."):
+    with st.spinner(f"Calculating GEX for {gex_ticker}..."):
         tk, spot, expirations = get_gex_data(gex_ticker)
         
         if tk and expirations:
             all_opts = []
-            # We only pull the first 3 expiries to keep the app fast and avoid more rate limits
+            # Use first 3 expiries to avoid rate limits and keep it fast
             for exp in expirations[:3]:
                 try:
                     chain = tk.option_chain(exp)
-                    c, p = chain.calls.copy(), chain.puts.copy()
-                    c['type'], p['type'] = 'call', 'put'
-                    c['exp'], p['exp'] = exp, exp
-                    all_opts.append(pd.concat([c, p]))
+                    calls, puts = chain.calls.copy(), chain.puts.copy()
+                    calls['type'], puts['type'] = 'call', 'put'
+                    calls['exp'], puts['exp'] = exp, exp
+                    all_opts.append(pd.concat([calls, puts]))
                 except Exception:
                     continue
             
             if not all_opts:
-                st.warning("Yahoo Finance returned no options data for the front-month expirations.")
+                st.error("No options data available for this ticker right now.")
             else:
                 df_gex = pd.concat(all_opts)
                 
-                # Timezone-aware DTE calculation
+                # Fix: Ensure both dates are 'naive' (no timezone) to allow subtraction
                 now = pd.Timestamp.now().tz_localize(None)
                 df_gex['dte'] = (pd.to_datetime(df_gex['exp']).dt.tz_localize(None) - now).dt.days / 365.0
                 df_gex['dte'] = df_gex['dte'].clip(lower=1/365)
                 
-                # Calculate GEX using the calc_gamma function defined at the top
+                # Run Gamma Calculation
                 df_gex['GEX'] = df_gex.apply(lambda r: calc_gamma(
                     spot, r['strike'], r['dte'], r['impliedVolatility'], 
                     0.04, 0.01, r['type'], r['openInterest']
                 ), axis=1)
                 
-                # Aggregate and plot
+                # Group and Scale
                 df_agg = df_gex.groupby('strike')['GEX'].sum() / 1e6
                 
+                # Plotting
                 fig, ax = plt.subplots(figsize=(12, 5))
                 fig.patch.set_facecolor('#0e1117')
                 ax.set_facecolor('#0e1117')
                 
-                # Use absolute value for coloring logic if you want call vs put distinction
-                ax.bar(df_agg.index, df_agg.values, width=(spot * 0.003), color='#00d4ff', alpha=0.7)
-                ax.axvline(spot, color='#ff4b4b', linestyle='--', linewidth=2, label=f'Current Spot: {spot:.2f}')
+                # Style the chart to match your terminal
+                ax.bar(df_agg.index, df_agg.values, width=(spot * 0.003), color='#00d4ff', alpha=0.8)
+                ax.axvline(spot, color='#ff4b4b', linestyle='--', linewidth=2, label=f'Spot: {spot:.2f}')
                 
-                # Filter x-axis to zoom in on the action
-                ax.set_xlim(spot * 0.94, spot * 1.06)
-                ax.set_title(f"{gex_ticker} Total GEX (Net Dealer Positioning)", color='white', size=14)
+                ax.set_xlim(spot * 0.94, spot * 1.06) # Zoom to +/- 6%
                 ax.tick_params(colors='white')
+                ax.set_xlabel("Strike Price", color='white')
+                ax.set_ylabel("GEX ($ Millions)", color='white')
                 ax.grid(True, alpha=0.1)
                 ax.legend(facecolor='#0e1117', labelcolor='white')
                 
                 st.pyplot(fig)
-                st.info("💡 **Gamma Analysis:** Large turquoise bars represent high Open Interest strikes. When the red line (Spot) moves toward a large bar, expect 'stickiness' or hedging volatility.")
+                st.info("💡 **GEX Insight:** Large bars represent 'Gamma Walls.' These strikes often act as strong support or resistance because market makers must hedge heavily there.")
         else:
-            st.error("Ticker data unavailable. Please try again in a few minutes.")
+            st.error("Data fetch failed. Check your internet or Ticker symbol.")
