@@ -433,13 +433,11 @@ with tab5:
 with tab6:
     st.subheader("📊 Gamma Exposure (GEX) Profile")
     
-    # 1. Ticker Selection and Range Control
     g_col1, g_col2 = st.columns([1, 2])
     with g_col1:
         gex_options = ["SPY", "QQQ", "NVDA", "AAPL", "TSLA", "MSFT", "AMZN", "META", "GOOGL"]
         gex_ticker = st.selectbox("Select Ticker", gex_options, index=0)
     with g_col2:
-        # Range slider to zoom in/out on the price action
         range_pct = st.slider("Strike Range (% from Spot)", 1, 15, 6)
 
     with st.spinner(f"Analyzing {gex_ticker} Gamma Walls..."):
@@ -450,7 +448,6 @@ with tab6:
             tk = yf.Ticker(gex_ticker)
             all_opts = []
             
-            # Pull first 3 expirations for the most relevant gamma
             for exp in expirations[:3]:
                 try:
                     chain = tk.option_chain(exp)
@@ -466,51 +463,49 @@ with tab6:
                 df_gex['dte'] = (pd.to_datetime(df_gex['exp']).dt.tz_localize(None) - now).dt.days / 365.0
                 df_gex['dte'] = df_gex['dte'].clip(lower=1/365)
                 
-                # Calculate GEX using your calc_gamma function
                 df_gex['GEX'] = df_gex.apply(lambda r: calc_gamma(
                     spot, r['strike'], r['dte'], r['impliedVolatility'], 0.04, 0.01, r['type'], r['openInterest']
                 ), axis=1)
                 
-                # Aggregate and prepare for plotting
                 df_agg = df_gex.groupby('strike')['GEX'].sum() / 1e6
                 
-                # --- PROFESSIONAL PLOTTING ---
+                # --- CALC GAMMA FLIP (Zero Gamma Level) ---
+                # We find the strike where the aggregate GEX is closest to zero
+                gamma_flip = df_agg.index[np.abs(df_agg.values).argmin()]
+                total_gex = df_agg.sum()
+
+                # --- SUMMARY METRICS ---
+                m1, m2, m3 = st.columns(3)
+                m1.metric("Current Spot", f"{spot:.2f}")
+                m2.metric("Gamma Flip Level", f"{gamma_flip:.2f}", 
+                          delta=f"{spot - gamma_flip:.2f} from Spot", delta_color="inverse")
+                m3.metric("Total Net GEX", f"${total_gex:,.1f}M")
+
+                # --- CHARTING ---
                 fig, ax = plt.subplots(figsize=(12, 6))
                 fig.patch.set_facecolor('#0e1117')
                 ax.set_facecolor('#0e1117')
                 
-                # Color logic: Turquoise for positive, Red for negative
                 bar_colors = ['#00d4ff' if val > 0 else '#ff4b4b' for val in df_agg.values]
+                ax.bar(df_agg.index, df_agg.values, width=(spot * 0.003), color=bar_colors, alpha=0.8)
                 
-                # Plot bars
-                ax.bar(df_agg.index, df_agg.values, width=(spot * 0.003), color=bar_colors, alpha=0.8, edgecolor='none')
-                
-                # Clean up the chart borders
-                ax.spines['top'].set_visible(False)
-                ax.spines['right'].set_visible(False)
-                ax.spines['left'].set_color('#444')
-                ax.spines['bottom'].set_color('#444')
-                
-                # Add a Zero Line and Spot Line
-                ax.axhline(0, color='white', linewidth=0.8, alpha=0.5)
+                # Zero Line, Spot Line, and Flip Line
+                ax.axhline(0, color='white', linewidth=0.8, alpha=0.3)
                 ax.axvline(spot, color='white', linestyle=':', linewidth=2, label=f'Spot: {spot:.2f}')
+                ax.axvline(gamma_flip, color='yellow', linestyle='--', linewidth=1.5, label=f'Flip: {gamma_flip:.2f}')
                 
-                # Formatting
                 limit = range_pct / 100
                 ax.set_xlim(spot * (1 - limit), spot * (1 + limit))
-                ax.tick_params(colors='white', labelsize=10)
-                ax.set_ylabel("GEX ($ Millions)", color='gray', fontsize=12)
-                ax.set_xlabel("Strike Price", color='gray', fontsize=12)
+                ax.spines['top'].set_visible(False)
+                ax.spines['right'].set_visible(False)
+                ax.tick_params(colors='white')
                 ax.grid(axis='y', linestyle='--', alpha=0.1)
                 ax.legend(facecolor='#0e1117', edgecolor='none', labelcolor='white')
                 
                 st.pyplot(fig)
                 
-                # --- SUMMARY METRICS ---
-                total_gex = df_agg.sum()
-                st.markdown(f"**Total Net GEX:** `${total_gex:,.2f}M` per 1% move")
-                st.info("💡 **Interpretation:** Positive (Turquoise) bars act as support/magnets. Negative (Red) bars increase volatility. Large clusters are 'Gamma Walls' where price often stalls.")
+                st.info(f"💡 **Trading Tip:** When price is above the **Flip Level ({gamma_flip:.2f})**, the market is in 'Long Gamma' (lower volatility). Below this level, the market enters 'Short Gamma,' where price swings tend to become much larger and faster.")
             else:
-                st.error("No options data found for this ticker.")
+                st.error("No options data found.")
         else:
-            st.error("Could not fetch spot price. Please try again.")
+            st.error("Could not fetch price data.")
