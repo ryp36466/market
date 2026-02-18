@@ -40,7 +40,8 @@ GLOBAL_TICKERS = {
     "VIX": "^VIX",
     "10Y Yield (^TNX)": "^TNX",
     "DXY (US Dollar)": "DX-Y.NYB"
-}SECTOR_TICKERS = {
+}
+SECTOR_TICKERS = {
     "Technology (XLK)": "XLK",
     "Financials (XLF)": "XLF",
     "Energy (XLE)": "XLE",
@@ -51,19 +52,22 @@ GLOBAL_TICKERS = {
     "Real Estate (XLRE)": "XLRE",
     "Consumer Staples (XLP)": "XLP",
     "Materials (XLB)": "XLB"
-}ETF_TICKERS = {
+}
+ETF_TICKERS = {
     "Bitcoin ETF (IBIT)": "IBIT",
     "Gold ETF (GLD)": "GLD",
     "Silver (SLV)": "SLV",
     "Bonds 20Y+ (TLT)": "TLT",
     "Semis (SMH)": "SMH",
     "Ark Innovation (ARKK)": "ARKK"
-}TWENTYFOUR_TICKERS = {
+}
+TWENTYFOUR_TICKERS = {
     "Bitcoin 24h (BTC-USD)": "BTC-USD",
     "Ethereum (ETH-USD)": "ETH-USD",
     "Gold Futures (GC)": "GC=F",
     "Crude Oil (CL)": "CL=F"
-}MAG7_TICKERS = {
+}
+MAG7_TICKERS = {
     "Apple (AAPL)": "AAPL",
     "Microsoft (MSFT)": "MSFT",
     "Nvidia (NVDA)": "NVDA",
@@ -71,16 +75,19 @@ GLOBAL_TICKERS = {
     "Alphabet (GOOGL)": "GOOGL",
     "Meta (META)": "META",
     "Tesla (TSLA)": "TSLA"
-}OPTIONS_TICKERS = {
+}
+OPTIONS_TICKERS = {
     **MAG7_TICKERS,
     "SPY (S&P 500 ETF)": "SPY",
     "QQQ (Nasdaq 100 ETF)": "QQQ",
     "VIX": "^VIX"
-}TIER_1_BANKS = [
+}
+TIER_1_BANKS = [
     "Goldman Sachs", "Morgan Stanley", "JPMorgan Chase", "JP Morgan",
     "Bank of America", "BofA", "Citigroup", "Barclays", "UBS",
     "Wells Fargo", "Deutsche Bank", "Credit Suisse"
-]ALL_TICKERS = {**GLOBAL_TICKERS, **SECTOR_TICKERS, **ETF_TICKERS,
+]
+ALL_TICKERS = {**GLOBAL_TICKERS, **SECTOR_TICKERS, **ETF_TICKERS,
                **TWENTYFOUR_TICKERS, **MAG7_TICKERS}# ========================== HELPERS ==========================
 def analyze_sentiment(text):
     if not text or not isinstance(text, str):
