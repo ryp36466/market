@@ -329,7 +329,14 @@ with c3:
     st.metric("Breadth", f"{up} ↑ / {len(full_market) - up} ↓", delta=up - (len(full_market) - up))
 
 st.divider()
-
+@st.cache_data(ttl=600)
+def get_gex_data(symbol):
+    tk = yf.Ticker(symbol)
+    hist = tk.history(period="1d")
+    if hist.empty: 
+        return None, None, None
+    spot = hist['Close'].iloc[-1]
+    return tk, spot, tk.options
 # Tabs
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([ # <--- Fixed: Added tab6
     "🌎 Global Indices", 
