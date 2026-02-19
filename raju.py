@@ -8,7 +8,6 @@ import pytz
 import requests
 from bs4 import BeautifulSoup
 from finvizfinance.news import News
-import matplotlib.pyplot as plt
 import plotly.express as px
 import plotly.graph_objects as go
 from scipy.stats import norm
@@ -42,11 +41,20 @@ if not check_password():
     st.stop()
 
 # ========================== TICKER CONFIGS ==========================
-GLOBAL_TICKERS = {"S&P 500 (ES)": "ES=F", "Nasdaq (NQ)": "NQ=F", "Dow (YM)": "YM=F", "SPY": "SPY", "QQQ": "QQQ", "VIX": "^VIX", "10Y Yield": "^TNX", "DXY": "DX-Y.NYB"}
+GLOBAL_TICKERS = {
+    "S&P 500 (ES)": "ES=F", 
+    "Nasdaq (NQ)": "NQ=F", 
+    "Dow (YM)": "YM=F", 
+    "SPY": "SPY", 
+    "QQQ": "QQQ", 
+    "VIX": "^VIX", 
+    "10Y Yield": "^TNX", 
+    "DXY": "DX-Y.NYB",
+    "S&P 500": "^GSPC"  # Added cash index (SPX)
+}
 SECTOR_TICKERS = {"Tech (XLK)": "XLK", "Financials (XLF)": "XLF", "Energy (XLE)": "XLE", "Healthcare (XLV)": "XLV", "Disc (XLY)": "XLY", "Indus (XLI)": "XLI", "Utils (XLU)": "XLU", "RE": "XLRE", "Staples (XLP)": "XLP", "Materials (XLB)": "XLB"}
 MAG7_TICKERS = {"Apple": "AAPL", "MSFT": "MSFT", "Nvidia": "NVDA", "Amazon": "AMZN", "Google": "GOOGL", "Meta": "META", "Tesla": "TSLA"}
 ALL_TICKERS = {**GLOBAL_TICKERS, **SECTOR_TICKERS, **MAG7_TICKERS}
-TIER_1_BANKS = ["Goldman Sachs", "Morgan Stanley", "JPMorgan", "Bank of America", "Citigroup", "Barclays", "UBS", "Wells Fargo", "Deutsche Bank"]
 
 # ========================== STABLE PCR FETCH ==========================
 def get_pcr_data():
@@ -116,7 +124,7 @@ def fetch_market_snapshot():
             rows.append({"Asset": label, "Symbol": sym, "Price": price, "Change %": change, "RVOL": rvol})
         except:
             continue
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows), intra
 
 # ========================== STABLE NEWS ENGINE ==========================
 def get_finviz_news_stable():
@@ -170,16 +178,86 @@ def get_finviz_news_stable():
             return []
 
 # ========================== MAIN UI ==========================
-market_df = fetch_market_snapshot()
+market_df, intra_data = fetch_market_snapshot()
 est = pytz.timezone('US/Eastern')
 time_now = datetime.datetime.now(est).strftime('%H:%M:%S')
 
 st.title("🏛️ Alpha Terminal Pro")
 st.caption(f"EST {time_now} | Performance: STABLE")
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["🔥 Alpha Sectors", "📊 GEX", "🐳 Options", "🎯 Institutional", "📰 News Wire"])
+tab_overview, tab_sectors, tab_gex, tab_options, tab_inst, tab_news = st.tabs([
+    "📈 Market Overview", 
+    "🔥 Alpha Sectors", 
+    "📊 GEX", 
+    "🐳 Options", 
+    "🎯 Institutional", 
+    "📰 News Wire"
+])
 
-with tab1:
+# ==================== MARKET OVERVIEW TAB ====================
+with tab_overview:
+    st.subheader("🗝️ Key Indices (SPY / QQQ / SPX)")
+    
+    key_assets = ["S&P 500", "SPY", "QQQ"]
+    key_df = market_df[market_df['Asset'].isin(key_assets)][['Asset', 'Price', 'Change %', 'RVOL']].copy()
+    key_df[['Price', 'Change %', 'RVOL']] = key_df[['Price', 'Change %', 'RVOL']].round(2)
+    
+    st.dataframe(
+        key_df.style.background_gradient(cmap='RdYlGn', subset=['Change %', 'RVOL']),
+        hide_index=True,
+        use_container_width=True
+    )
+    
+    st.subheader("🚀 Magnificent 7")
+    
+    mag7_df = market_df[market_df['Asset'].isin(MAG7_TICKERS.keys())].copy()
+    mag7_df = mag7_df.sort_values('Change %', ascending=False)
+    
+    spy_change = market_df[market_df['Asset'] == "SPY"]['Change %'].iloc[0] if not market_df[market_df['Asset'] == "SPY"].empty else 0.0
+    mag7_df['vs SPY (%)'] = (mag7_df['Change %'] - spy_change).round(2)
+    
+    display_cols = ['Asset', 'Price', 'Change %', 'vs SPY (%)', 'RVOL']
+    mag7_df[display_cols] = mag7_df[display_cols].round(2)
+    
+    st.dataframe(
+        mag7_df[display_cols].style.background_gradient(cmap='RdYlGn', subset=['Change %', 'vs SPY (%)', 'RVOL']),
+        hide_index=True,
+        use_container_width=True
+    )
+    
+    st.subheader("📉 Intraday Price Action")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        if 'SPY' in intra_data['Close'].columns:
+            fig = px.line(intra_data['Close']['SPY'].dropna(), title="SPY Intraday")
+            fig.update_layout(template="plotly_dark", height=400, margin=dict(l=20, r=20, t=40, b=20))
+            st.plotly_chart(fig, use_container_width=True)
+    
+    with col2:
+        if 'QQQ' in intra_data['Close'].columns:
+            fig = px.line(intra_data['Close']['QQQ'].dropna(), title="QQQ Intraday")
+            fig.update_layout(template="plotly_dark", height=400, margin=dict(l=20, r=20, t=40, b=20))
+            st.plotly_chart(fig, use_container_width=True)
+    
+    with col3:
+        if '^GSPC' in intra_data['Close'].columns:
+            fig = px.line(intra_data['Close']['^GSPC'].dropna(), title="S&P 500 (SPX) Intraday")
+            fig.update_layout(template="plotly_dark", height=400, margin=dict(l=20, r=20, t=40, b=20))
+            st.plotly_chart(fig, use_container_width=True)
+    
+    st.subheader("🔍 MAG7 Intraday Detail")
+    selected_mag = st.selectbox("Select MAG7 Stock for Intraday Chart", list(MAG7_TICKERS.keys()))
+    sym = MAG7_TICKERS[selected_mag]
+    
+    if sym in intra_data['Close'].columns:
+        fig = px.line(intra_data['Close'][sym].dropna(), title=f"{selected_mag} Intraday")
+        fig.update_layout(template="plotly_dark", height=500)
+        st.plotly_chart(fig, use_container_width=True)
+
+# ==================== ALPHA SECTORS TAB ====================
+with tab_sectors:
     sect_data = market_df[market_df['Asset'].isin(SECTOR_TICKERS.keys())].copy()
     st.dataframe(
         sect_data[['Asset', 'Price', 'Change %', 'RVOL']]
@@ -188,7 +266,8 @@ with tab1:
         use_container_width=True
     )
 
-with tab2:
+# ==================== GEX TAB ====================
+with tab_gex:
     gex_ticker = st.selectbox("Analyze GEX", ["SPY", "QQQ", "NVDA", "AAPL", "TSLA"])
     tk = yf.Ticker(gex_ticker)
     spot = tk.history(period="1d")['Close'].iloc[-1]
@@ -220,7 +299,8 @@ with tab2:
         fig_gex.update_layout(template="plotly_dark", title=f"{gex_ticker} Net Gamma Walls")
         st.plotly_chart(fig_gex, use_container_width=True)
 
-with tab3:
+# ==================== OPTIONS TAB ====================
+with tab_options:
     st.subheader("🐳 Put/Call Volume Ratio")
     pcr_df = get_pcr_data()
     if not pcr_df.empty:
@@ -232,7 +312,8 @@ with tab3:
     else:
         st.info("Gathering options flow...")
 
-with tab4:
+# ==================== INSTITUTIONAL TAB ====================
+with tab_inst:
     st.subheader("🎯 Analyst Activity")
     target_analyst = st.selectbox("Analyst Focus", list(MAG7_TICKERS.keys()))
     try:
@@ -242,14 +323,14 @@ with tab4:
     except:
         st.info("No analyst data available.")
 
-with tab5:
+# ==================== NEWS TAB ====================
+with tab_news:
     st.subheader("📰 Market News & Sentiment")
     headlines = get_finviz_news_stable()
 
     if headlines:
         total_score = 0
         for item in headlines:
-            # Robust key access in case library vs scraper have different casing
             title = item.get('Title') or item.get('title') or "No title"
             url = item.get('URL') or item.get('Link') or item.get('link') or "#"
             source = item.get('Source') or item.get('source') or "Finviz"
@@ -261,7 +342,6 @@ with tab5:
                 st.write(f"**Source:** {source}")
                 st.write(f"[Full Story]({url})")
 
-        # Sidebar sentiment pulse
         st.sidebar.divider()
         sentiment_direction = "Positive" if total_score >= 0 else "Negative"
         st.sidebar.metric("Sentiment Pulse", total_score, delta=sentiment_direction)
