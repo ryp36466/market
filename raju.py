@@ -63,22 +63,32 @@ def fetch_pcr_single(item):
             cv += ch.calls['volume'].sum()
             pv += ch.puts['volume'].sum()
         pcr = pv / cv if cv > 0 else 0
-        return {"Asset": label, "PCR": pcr, "Sentiment": "🐂 Bull" if pcr < 0.85 else "Bear" if pcr > 1.15 else "⚖️ Neu"}
+        return {"Asset": label, "PCR": pcr, "Sentiment": "🐂 Bull" if pcr < 0.85 else "🐻 Bear" if pcr > 1.15 else "⚖️ Neu"}
     except: return None
 
 # ========================== DATA ENGINE ==========================
 @st.cache_data(ttl=45)
 def fetch_market_snapshot():
     symbols = list(ALL_TICKERS.values())
-    data = yf.download(symbols, period="2d", interval="5m", prepost=True, group_by='ticker', progress=False)
+    # Fetching 5 days of data to calculate average volume for RVOL
+    data = yf.download(symbols, period="5d", interval="1d", progress=False)
+    # Fetching today's intraday data
+    intra = yf.download(symbols, period="1d", interval="5m", prepost=True, progress=False)
+    
     rows = []
     for label, sym in ALL_TICKERS.items():
         try:
-            subset = data[sym].dropna()
-            price = subset['Close'].iloc[-1]
-            prev_close = subset['Close'].iloc[0] 
+            # Price and Change
+            price = intra['Close'][sym].dropna().iloc[-1]
+            prev_close = data['Close'][sym].iloc[-2]
             change = ((price - prev_close) / prev_close) * 100
-            rows.append({"Asset": label, "Symbol": sym, "Price": price, "Change %": change})
+            
+            # RVOL Calculation (Today's Vol vs 5-Day Avg Vol)
+            today_vol = intra['Volume'][sym].sum()
+            avg_vol = data['Volume'][sym].iloc[-5:-1].mean()
+            rvol = today_vol / avg_vol if avg_vol > 0 else 1.0
+            
+            rows.append({"Asset": label, "Symbol": sym, "Price": price, "Change %": change, "RVOL": rvol})
         except: continue
     return pd.DataFrame(rows)
 
@@ -117,7 +127,7 @@ with st.sidebar:
         st.warning(f"Total Risk: ${(acc_size * (risk_pct/100)):.2f}")
     
     st.divider()
-    refresh = st.number_input('Refresh (s)', 15, 600, 30, step=15)
+    refresh = st.sidebar.number_input('Refresh (s)', 15, 600, 30, step=15)
     st_autorefresh(interval=refresh * 1000, key="auto_refresh")
 
 # ========================== MAIN UI ==========================
@@ -126,7 +136,7 @@ est = pytz.timezone('US/Eastern')
 time_now = datetime.datetime.now(est).strftime('%H:%M:%S')
 
 st.title("🏛️ Alpha Market Terminal")
-st.caption(f"EST {time_now} | Pro Strategy Feed")
+st.caption(f"EST {time_now} | Real-time Relative Strength & Volume Profile")
 
 # Top Metrics Ribbon
 m_cols = st.columns(len(GLOBAL_TICKERS))
@@ -145,11 +155,21 @@ with tab1:
     spy_chg = market_df[market_df['Symbol'] == 'SPY']['Change %'].values[0] if 'SPY' in market_df['Symbol'].values else 0
     sect_data['RS'] = sect_data['Change %'] - spy_chg
     
-    fig = px.bar(sect_data.sort_values('RS'), x='RS', y='Asset', orientation='h',
-                 color='RS', color_continuous_scale='RdYlGn', 
-                 title="Relative Strength vs SPY")
-    fig.update_layout(template="plotly_dark", height=450)
-    st.plotly_chart(fig, use_container_width=True)
+    col_table, col_heat = st.columns([1, 1.5])
+    
+    with col_table:
+        st.subheader("Sector Scanner")
+        st.dataframe(
+            sect_data[['Asset', 'Change %', 'RS', 'RVOL']].style.background_gradient(subset=['RS', 'RVOL'], cmap='RdYlGn'),
+            hide_index=True, use_container_width=True
+        )
+    
+    with col_heat:
+        st.subheader("Relative Strength (Alpha)")
+        fig = px.bar(sect_data.sort_values('RS'), x='RS', y='Asset', orientation='h',
+                     color='RS', color_continuous_scale='RdYlGn')
+        fig.update_layout(template="plotly_dark", height=400, margin=dict(l=0, r=0, t=30, b=0))
+        st.plotly_chart(fig, use_container_width=True)
 
 with tab2:
     gex_ticker = st.selectbox("GEX Analysis", ["SPY", "QQQ", "NVDA", "AAPL", "TSLA"])
@@ -181,12 +201,12 @@ with tab2:
         st.plotly_chart(fig_gex, use_container_width=True)
 
 with tab3:
-    st.subheader("Put/Call Ratio (Front Expirations)")
+    st.subheader("Institutional Put/Call Flow")
     targets = {**MAG7_TICKERS, "SPY": "SPY", "QQQ": "QQQ"}
     with ThreadPoolExecutor(max_workers=5) as ex:
         res = list(ex.map(fetch_pcr_single, targets.items()))
     pcr_df = pd.DataFrame([r for r in res if r])
-    st.dataframe(pcr_df.style.background_gradient(subset=['PCR'], cmap='RdYlGn_r'), hide_index=True)
+    st.dataframe(pcr_df.style.background_gradient(subset=['PCR'], cmap='RdYlGn_r'), hide_index=True, use_container_width=True)
 
 with tab4:
     target_analyst = st.selectbox("Analyst Focus", list(MAG7_TICKERS.keys()))
@@ -194,3 +214,4 @@ with tab4:
     if recs is not None and not recs.empty:
         filtered = recs[recs['Firm'].str.contains('|'.join(TIER_1_BANKS), case=False, na=False)].tail(10)
         st.table(filtered[['Firm', 'To Grade', 'Action']])
+    else: st.info("No recent Tier 1 updates for this asset.")
