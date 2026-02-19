@@ -428,6 +428,7 @@ with tab_options:
         st.info("Gathering options flow...")
 
 # ==================== EARNINGS TAB ====================
+# ==================== EARNINGS TAB ====================
 with tab_earnings:
     st.subheader("🎯 Magnificent 7 Earnings Intelligence")
     st.caption("Recent EPS performance, surprise history, and upcoming report dates.")
@@ -435,7 +436,6 @@ with tab_earnings:
     earn_df = get_mag7_earnings()
     
     if not earn_df.empty:
-        # Styling
         styled_df = earn_df.style\
             .background_gradient(cmap='RdYlGn', subset=['Surprise (%)'])\
             .applymap(
@@ -446,12 +446,26 @@ with tab_earnings:
         
         st.dataframe(styled_df, hide_index=True, use_container_width=True)
         
-        # Next catalyst highlight
         upcoming = earn_df[earn_df['Next Date'] != "TBD"]
         if not upcoming.empty:
-            next_up = upcoming.sort_values("Next Date").iloc[0]
-            days_left = (pd.to_datetime(next_up['Next Date']) - pd.Timestamp.now().date()).days
-            st.success(f"🚀 **Next Catalyst:** {next_up['Asset']} reports on **{next_up['Next Date']}** ({days_left} days)")
+            # Sort by parsed date to ensure correct ordering
+            upcoming['parsed_date'] = pd.to_datetime(upcoming['Next Date'])
+            next_up = upcoming.sort_values('parsed_date').iloc[0]
+            
+            # Fixed days_left calculation (safe type handling)
+            next_date = pd.to_datetime(next_up['Next Date'])
+            days_left = (next_date - pd.Timestamp.today()).days
+            
+            if days_left == 0:
+                day_text = "today"
+            elif days_left == 1:
+                day_text = "tomorrow"
+            elif days_left < 0:
+                day_text = f"{abs(days_left)} days ago (already reported?)"
+            else:
+                day_text = f"in {days_left} days"
+            
+            st.success(f"🚀 **Next Catalyst:** {next_up['Asset']} reports on **{next_up['Next Date']}** ({day_text})")
         else:
             st.info("No confirmed upcoming earnings dates at this time (common outside reporting season).")
     else:
