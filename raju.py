@@ -68,8 +68,23 @@ def get_pcr_data():
                     cv += ch.calls['volume'].sum()
                     pv += ch.puts['volume'].sum()
                 pcr = pv / cv if cv > 0 else 0
-                results.append({"Asset": label, "PCR": round(pcr, 2),
-                                "Sentiment": "🐂 Bull" if pcr < 0.85 else "🐻 Bear" if pcr > 1.15 else "⚖️ Neu"})
+                
+                if pcr < 0.85:
+                    sentiment = "🐂 Bull"
+                    rec = "🟢 BUY CALLS"
+                elif pcr > 1.15:
+                    sentiment = "🐻 Bear"
+                    rec = "🔴 BUY PUTS"
+                else:
+                    sentiment = "⚖️ Neutral"
+                    rec = "⚪ Neutral / Straddle"
+                
+                results.append({
+                    "Asset": label,
+                    "PCR": round(pcr, 2),
+                    "Sentiment": sentiment,
+                    "Recommendation": rec
+                })
         except:
             continue
     return pd.DataFrame(results)
@@ -109,7 +124,7 @@ def fetch_market_snapshot():
             continue
     return pd.DataFrame(rows), intra
 
-# ========================== EARNINGS CALENDAR (Dynamic + Beat Filter) ==========================
+# ========================== EARNINGS CALENDAR ==========================
 def get_earnings_calendar(date_str):
     url = f"https://api.nasdaq.com/api/calendar/earnings?date={date_str}"
     headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.nasdaq.com/"}
@@ -318,7 +333,7 @@ with tab_sectors:
 
 # ==================== GEX ====================
 with tab_gex:
-    st.subheader("📊 Gamma Exposure (GEX) Analysis")
+    st.subheader("📊 Gamma Exposure (GEX) Analysis + Gamma Flip")
     user_ticker = st.text_input("Enter Ticker for GEX", value="SPY").upper().strip()
     if user_ticker:
         try:
@@ -329,43 +344,87 @@ with tab_gex:
                 st.stop()
             spot = round(tk.history(period="1d")['Close'].iloc[-1], 2)
             st.write(f"**Current Price:** ${spot}")
+
             all_chains = []
             for exp in options[:3]:
                 ch = tk.option_chain(exp)
                 c = ch.calls.assign(type='call', exp=exp)
                 p = ch.puts.assign(type='put', exp=exp)
                 all_chains.extend([c, p])
+
             df_g = pd.concat(all_chains, ignore_index=True)
             df_g['dte'] = (pd.to_datetime(df_g['exp']).dt.tz_localize(None) - datetime.datetime.now()).dt.days / 365.0
             df_g['GEX'] = calc_gamma_vectorized(spot, df_g['strike'].values, df_g['dte'].values,
                                                 df_g['impliedVolatility'].values, 0.04, 0.01,
                                                 df_g['type'].values, df_g['openInterest'].values)
+
             df_agg = (df_g.groupby('strike')['GEX'].sum() / 1e6).sort_index()
             df_agg = df_agg[df_agg.abs() > 0.01]
+
+            # ====================== GAMMA FLIP CALCULATION ======================
+            gamma_flip = spot
+            if not df_agg.empty:
+                strikes = np.array(df_agg.index)
+                gex_vals = np.array(df_agg.values)
+                cum_gex = np.cumsum(gex_vals)
+                sign_changes = np.where(np.diff(np.sign(cum_gex)) != 0)[0]
+                if len(sign_changes) > 0:
+                    i = sign_changes[0]
+                    x1, x2 = strikes[i], strikes[i+1]
+                    y1, y2 = cum_gex[i], cum_gex[i+1]
+                    gamma_flip = x1 - y1 * (x2 - x1) / (y2 - y1) if (y2 - y1) != 0 else (x1 + x2) / 2
+                else:
+                    gamma_flip = strikes[np.argmin(np.abs(cum_gex))]
+                gamma_flip = round(gamma_flip, 2)
+
+            # Metrics
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("**Spot Price**", f"${spot}")
+            with col2:
+                st.metric("**Gamma Flip Level**", f"${gamma_flip}")
+            with col3:
+                status = "🟢 LONG GAMMA (Stable)" if spot > gamma_flip else "🔴 SHORT GAMMA (Volatile)"
+                st.metric("Dealer Gamma Regime", status)
+
+            if abs(spot - gamma_flip) <= 10:
+                st.warning(f"⚠️ **Price is very close to Gamma Flip (${gamma_flip})** → Expect chop / volatility expansion!")
+
+            # Plot
             fig = go.Figure(go.Bar(x=df_agg.index, y=df_agg.values,
                                    marker_color=['green' if x > 0 else 'red' for x in df_agg.values]))
             fig.add_vline(x=spot, line_dash="dash", line_color="white", annotation_text=f"Spot ${spot}")
-            fig.update_layout(template="plotly_dark", title=f"{user_ticker} Net Gamma Exposure", height=600)
+            fig.add_vline(x=gamma_flip, line_dash="dot", line_color="yellow", 
+                          annotation_text="⚡ GAMMA FLIP", annotation_position="top left")
+            fig.update_layout(template="plotly_dark", 
+                              title=f"{user_ticker} Net Gamma Exposure + Gamma Flip",
+                              height=650)
             st.plotly_chart(fig, use_container_width=True)
+
         except Exception as e:
             st.error(f"Error: {str(e)}")
 
 # ==================== OPTIONS ====================
 with tab_options:
-    st.subheader("🐳 Put/Call Volume Ratio")
+    st.subheader("🐳 Put/Call Volume Ratio + Options Bias")
     pcr_df = get_pcr_data()
     if not pcr_df.empty:
-        st.dataframe(pcr_df.style.background_gradient(subset=['PCR'], cmap='RdYlGn_r'), hide_index=True, use_container_width=True)
+        styled = pcr_df.style\
+            .background_gradient(subset=['PCR'], cmap='RdYlGn_r')\
+            .applymap(lambda x: 'background-color: #00ff00; color: black; font-weight:bold' if 'BUY CALLS' in str(x) else
+                              'background-color: #ff4b4b; color: white; font-weight:bold' if 'BUY PUTS' in str(x) else '', 
+                      subset=['Recommendation'])
+        st.dataframe(styled, hide_index=True, use_container_width=True)
     else:
         st.info("Gathering options flow...")
 
-# ==================== EARNINGS TAB (TODAY + YESTERDAY + BEAT FILTER) ====================
+# ==================== EARNINGS ====================
 with tab_earnings:
     st.subheader("🎯 Earnings Intelligence")
     st.caption("MAG7 + Stocks reporting TODAY / YESTERDAY where EPS Beat = Revenue Beat")
 
     ticker_dict = MAG7_TICKERS.copy()
-    seen_symbols = set(MAG7_TICKERS.values())   # Prevents duplicates
+    seen_symbols = set(MAG7_TICKERS.values())
 
     for item in get_todays_earnings() + get_yesterdays_earnings():
         sym = item["Symbol"]
@@ -391,13 +450,12 @@ with tab_earnings:
                 earn_df.at[idx, "Revenue Beat"] = "✅" if cal.get("Revenue Beat") else "❌" if cal.get("Revenue Beat") is False else "—"
                 earn_df.at[idx, "Reported"] = "📢 TODAY" if sym in [i["Symbol"] for i in get_todays_earnings()] else "📢 YESTERDAY"
 
-        # Keep only rows where EPS Beat == Revenue Beat (for non-MAG7)
         def same_beat(row):
             e = row["EPS Beat"]
             r = row["Revenue Beat"]
             if e in ["✅", "❌"] and r in ["✅", "❌"]:
                 return (e == "✅" and r == "✅") or (e == "❌" and r == "❌")
-            return True  # keep MAG7
+            return True
 
         earn_df = earn_df[earn_df.apply(same_beat, axis=1)]
 
@@ -420,7 +478,7 @@ with tab_earnings:
     else:
         st.warning("Earnings data temporarily unavailable.")
 
-# ==================== ATH/ATL PLAYS TAB ====================
+# ==================== ATH/ATL PLAYS ====================
 with tab_extremes:
     st.subheader("🔥 Yesterday's Earnings Near ATH / ATL")
     st.caption("Reported yesterday • EPS Beat = Revenue Beat • Within 5% of 52-week high/low")
