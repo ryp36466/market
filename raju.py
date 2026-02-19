@@ -42,7 +42,24 @@ MAG7_TICKERS = {"Apple": "AAPL", "MSFT": "MSFT", "Nvidia": "NVDA", "Amazon": "AM
 ALL_TICKERS = {**GLOBAL_TICKERS, **SECTOR_TICKERS, **MAG7_TICKERS}
 TIER_1_BANKS = ["Goldman Sachs", "Morgan Stanley", "JPMorgan", "Bank of America", "Citigroup", "Barclays", "UBS", "Wells Fargo", "Deutsche Bank"]
 
-# ========================== HELPER FUNCTIONS ==========================
+# ========================== SENTIMENT ENGINE ==========================
+def get_sentiment_score(text):
+    """Simple keyword-based sentiment analysis for financial headlines."""
+    bull_words = ['upbeat', 'growth', 'surge', 'rally', 'beat', 'buy', 'bullish', 'expansion', 'profit', 'gain', 'positive']
+    bear_words = ['slump', 'drop', 'fall', 'miss', 'sell', 'bearish', 'contraction', 'loss', 'negative', 'inflation', 'fear', 'risk']
+    
+    score = 0
+    text = text.lower()
+    for word in bull_words:
+        if word in text: score += 1
+    for word in bear_words:
+        if word in text: score -= 1
+        
+    if score > 0: return "🟢 Bullish", score
+    if score < 0: return "🔴 Bearish", score
+    return "⚪ Neutral", 0
+
+# ========================== DATA HELPERS ==========================
 def calc_gamma_vectorized(S, K, T, v, r, q, types, OI):
     T = np.maximum(T, 1/365)
     v = np.maximum(v, 0.01)
@@ -51,39 +68,18 @@ def calc_gamma_vectorized(S, K, T, v, r, q, types, OI):
     val = (OI * 100) * (S**2) * 0.01 * gamma
     return np.where(types == 'call', val, -val)
 
-def fetch_pcr_single(item):
-    label, sym = item
-    try:
-        tk = yf.Ticker(sym)
-        cv = pv = 0
-        opts = tk.options
-        if not opts: return None
-        for exp in opts[:2]:
-            ch = tk.option_chain(exp)
-            cv += ch.calls['volume'].sum()
-            pv += ch.puts['volume'].sum()
-        pcr = pv / cv if cv > 0 else 0
-        return {"Asset": label, "PCR": pcr, "Sentiment": "🐂 Bull" if pcr < 0.85 else "🐻 Bear" if pcr > 1.15 else "⚖️ Neu"}
-    except: return None
-
-# ========================== DATA ENGINE ==========================
 @st.cache_data(ttl=45)
 def fetch_market_snapshot():
     symbols = list(ALL_TICKERS.values())
-    # Fetching 5 days of data to calculate average volume for RVOL
     data = yf.download(symbols, period="5d", interval="1d", progress=False)
-    # Fetching today's intraday data
     intra = yf.download(symbols, period="1d", interval="5m", prepost=True, progress=False)
     
     rows = []
     for label, sym in ALL_TICKERS.items():
         try:
-            # Price and Change
             price = intra['Close'][sym].dropna().iloc[-1]
             prev_close = data['Close'][sym].iloc[-2]
             change = ((price - prev_close) / prev_close) * 100
-            
-            # RVOL Calculation (Today's Vol vs 5-Day Avg Vol)
             today_vol = intra['Volume'][sym].sum()
             avg_vol = data['Volume'][sym].iloc[-5:-1].mean()
             rvol = today_vol / avg_vol if avg_vol > 0 else 1.0
@@ -92,85 +88,59 @@ def fetch_market_snapshot():
         except: continue
     return pd.DataFrame(rows)
 
-@st.cache_data(ttl=300)
-def get_atr_data(symbol):
-    try:
-        data = yf.download(symbol, period="5d", interval="5m", progress=False)
-        high_low = data['High'] - data['Low']
-        high_cp = np.abs(data['High'] - data['Close'].shift())
-        low_cp = np.abs(data['Low'] - data['Close'].shift())
-        tr = pd.concat([high_low, high_cp, low_cp], axis=1).max(axis=1)
-        atr = tr.rolling(14).mean().iloc[-1]
-        return atr
-    except: return 0
-
-# ========================== SIDEBAR: RISK MGMT ==========================
-with st.sidebar:
-    st.header("🧮 Trade Planning")
-    acc_size = st.number_input("Account ($)", 1000, 1000000, 50000)
-    risk_pct = st.slider("Risk (%)", 0.25, 5.0, 1.0, 0.25)
-    
-    ticker_focus = st.selectbox("ATR Reference", list(MAG7_TICKERS.keys()))
-    atr_val = get_atr_data(MAG7_TICKERS[ticker_focus])
-    st.write(f"5m ATR: **{atr_val:.2f}**")
-    
-    entry = st.number_input("Entry Price", 0.0, 100000.0, 0.0)
-    if st.button("Suggest Stop (2x ATR)"):
-        st.session_state.stop_val = entry - (2 * atr_val)
-    
-    stop = st.number_input("Stop Price", 0.0, 100000.0, st.session_state.get('stop_val', 0.0))
-    
-    if entry > 0 and stop > 0 and entry != stop:
-        risk_per_sh = abs(entry - stop)
-        pos_size = (acc_size * (risk_pct/100)) / risk_per_sh
-        st.success(f"Size: **{int(pos_size)} Shares**")
-        st.warning(f"Total Risk: ${(acc_size * (risk_pct/100)):.2f}")
-    
-    st.divider()
-    refresh = st.sidebar.number_input('Refresh (s)', 15, 600, 30, step=15)
-    st_autorefresh(interval=refresh * 1000, key="auto_refresh")
-
 # ========================== MAIN UI ==========================
 market_df = fetch_market_snapshot()
 est = pytz.timezone('US/Eastern')
 time_now = datetime.datetime.now(est).strftime('%H:%M:%S')
 
-st.title("🏛️ Alpha Market Terminal")
-st.caption(f"EST {time_now} | Real-time Relative Strength & Volume Profile")
+st.title("🏛️ Alpha Terminal Pro")
+st.caption(f"EST {time_now} | Intelligence Feed")
 
-# Top Metrics Ribbon
-m_cols = st.columns(len(GLOBAL_TICKERS))
-for i, (label, sym) in enumerate(GLOBAL_TICKERS.items()):
-    row = market_df[market_df['Asset'] == label]
-    if not row.empty:
-        r = row.iloc[0]
-        m_cols[i].metric(label, f"{r['Price']:.2f}", f"{r['Change %']:+.2f}%")
-
-st.divider()
-
-tab1, tab2, tab3, tab4 = st.tabs(["🔥 Alpha Sectors", "📊 GEX & Gamma", "🐳 Options Flow", "🎯 Institutional"])
+# Tabs
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["🔥 Alpha Sectors", "📊 GEX", "🐳 Options", "🎯 Institutional", "📰 News & Sentiment"])
 
 with tab1:
     sect_data = market_df[market_df['Asset'].isin(SECTOR_TICKERS.keys())].copy()
-    spy_chg = market_df[market_df['Symbol'] == 'SPY']['Change %'].values[0] if 'SPY' in market_df['Symbol'].values else 0
-    sect_data['RS'] = sect_data['Change %'] - spy_chg
-    
-    col_table, col_heat = st.columns([1, 1.5])
-    
-    with col_table:
-        st.subheader("Sector Scanner")
-        st.dataframe(
-            sect_data[['Asset', 'Change %', 'RS', 'RVOL']].style.background_gradient(subset=['RS', 'RVOL'], cmap='RdYlGn'),
-            hide_index=True, use_container_width=True
-        )
-    
-    with col_heat:
-        st.subheader("Relative Strength (Alpha)")
-        fig = px.bar(sect_data.sort_values('RS'), x='RS', y='Asset', orientation='h',
-                     color='RS', color_continuous_scale='RdYlGn')
-        fig.update_layout(template="plotly_dark", height=400, margin=dict(l=0, r=0, t=30, b=0))
-        st.plotly_chart(fig, use_container_width=True)
+    st.dataframe(sect_data[['Asset', 'Price', 'Change %', 'RVOL']].style.background_gradient(cmap='RdYlGn'), hide_index=True)
 
+with tab5:
+    st.subheader("🔥 Live News & Sentiment Pulse")
+    try:
+        f_news = News().get_news()
+        headlines = f_news['news'][:25]
+        
+        total_sentiment = 0
+        news_rows = []
+        
+        for item in headlines:
+            label, score = get_sentiment_score(item['Title'])
+            total_sentiment += score
+            news_rows.append({
+                "Time": item.get('Date', 'Live'),
+                "Headline": item['Title'],
+                "Sentiment": label,
+                "Source": item['Source'],
+                "URL": item['URL']
+            })
+        
+        # Sentiment Meter
+        pulse_col, meter_col = st.columns([1, 2])
+        with pulse_col:
+            pulse_color = "green" if total_sentiment > 0 else "red" if total_sentiment < 0 else "white"
+            st.metric("Market Pulse Score", total_sentiment, delta=total_sentiment)
+            st.write(f"Aggregate bias is currently **{pulse_color.upper()}**.")
+            
+        # Display News
+        st.divider()
+        for res in news_rows:
+            with st.expander(f"{res['Sentiment']} | {res['Headline']}"):
+                st.write(f"**Source:** {res['Source']} | **Time:** {res['Time']}")
+                st.write(f"[Read Full Article]({res['URL']})")
+                
+    except Exception as e:
+        st.error("Could not load news feed.")
+
+# (Keep your existing Tab 2, 3, 4 logic below this point)
 with tab2:
     gex_ticker = st.selectbox("GEX Analysis", ["SPY", "QQQ", "NVDA", "AAPL", "TSLA"])
     tk = yf.Ticker(gex_ticker)
