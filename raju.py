@@ -130,7 +130,7 @@ def fetch_market_snapshot():
     return pd.DataFrame(rows), intra
 
 # ========================== MAG7 EARNINGS (enhanced with revenue & consensus) ==========================
-@st.cache_data(ttl=1800)  # cache 30 min
+@st.cache_data(ttl=1800)  # 30 min cache
 def get_mag7_earnings_enhanced():
     earnings_list = []
     est = pytz.timezone('US/Eastern')
@@ -140,47 +140,43 @@ def get_mag7_earnings_enhanced():
         try:
             tk = yf.Ticker(sym)
             info = tk.info or {}
-            hist = tk.get_earnings_dates(limit=8)  # get more history to find last reported
+            hist = tk.get_earnings_dates(limit=8)
 
             next_date = "TBD"
             is_upcoming = False
-            last_eps = "N/A"
-            last_rev = "N/A"
+            last_eps = np.nan
+            last_rev = np.nan
             eps_surprise = 0.0
             rev_surprise = 0.0
-            consensus_eps = "N/A"
-            consensus_rev = "N/A"
+            consensus_eps = np.nan
+            consensus_rev = np.nan
             status = "—"
 
             if hist is not None and not hist.empty:
-                # Next earnings date
                 future = hist[hist.index > now]
                 if not future.empty:
                     next_date = future.index[0].strftime('%Y-%m-%d')
                     is_upcoming = True
 
-                # Last reported quarter
                 reported = hist.dropna(subset=['Reported EPS'])
                 if not reported.empty:
                     recent = reported.iloc[0]
-                    last_eps = round(recent['Reported EPS'], 2) if pd.notna(recent['Reported EPS']) else "N/A"
+                    last_eps = recent['Reported EPS'] if pd.notna(recent['Reported EPS']) else np.nan
 
-                    # Surprise
                     if 'Surprise(%)' in recent and pd.notna(recent['Surprise(%)']):
-                        eps_surprise = round(recent['Surprise(%)'], 1)
+                        eps_surprise = recent['Surprise(%)']
 
-                    # Consensus EPS (estimated before report)
                     if 'Estimate' in recent and pd.notna(recent['Estimate']):
-                        consensus_eps = round(recent['Estimate'], 2)
+                        consensus_eps = recent['Estimate']
 
-                    # Revenue (if available in yfinance)
+                    # Revenue fields (yfinance sometimes has them)
                     if 'Reported Revenue' in recent and pd.notna(recent['Reported Revenue']):
-                        last_rev = f"${recent['Reported Revenue']/1e9:.2f}B"
-                        if 'Revenue Estimate' in recent and pd.notna(recent['Revenue Estimate']):
-                            rev_est = recent['Revenue Estimate']
-                            rev_surprise_pct = ((recent['Reported Revenue'] - rev_est) / rev_est * 100) if rev_est != 0 else 0
-                            rev_surprise = round(rev_surprise_pct, 1)
-                            consensus_rev = f"${rev_est/1e9:.2f}B"
+                        last_rev = recent['Reported Revenue']
+                    if 'Revenue Estimate' in recent and pd.notna(recent['Revenue Estimate']):
+                        rev_est = recent['Revenue Estimate']
+                        consensus_rev = rev_est
+                        if last_rev and rev_est and rev_est != 0:
+                            rev_surprise = ((last_rev - rev_est) / rev_est) * 100
 
                     status = "✅ Beat" if eps_surprise > 0 else "❌ Miss" if eps_surprise < 0 else "Met"
 
@@ -199,20 +195,19 @@ def get_mag7_earnings_enhanced():
             earnings_list.append({
                 "Asset": label,
                 "Next Earnings": "Error",
-                "Last EPS": "N/A",
-                "Consensus EPS": "N/A",
+                "Last EPS": np.nan,
+                "Consensus EPS": np.nan,
                 "EPS Surprise %": 0.0,
-                "Last Revenue": "N/A",
-                "Consensus Revenue": "N/A",
+                "Last Revenue": np.nan,
+                "Consensus Revenue": np.nan,
                 "Revenue Surprise %": 0.0,
                 "Status": "—"
             })
 
     df = pd.DataFrame(earnings_list)
-    df = df.sort_values("Asset")
-    return df
+    return df.sort_values("Asset")
 
-# ========================== OTHER HELPERS (unchanged) ==========================
+# ========================== NEWS ==========================
 def get_finviz_news_stable():
     try:
         return News().get_news()['news'].head(15).to_dict('records')
@@ -384,7 +379,7 @@ with tab_options:
     else:
         st.info("Gathering options flow...")
 
-# ==================== EARNINGS – MAG7 ONLY + Revenue / Consensus / Surprise ====================
+# ==================== EARNINGS – MAG7 ONLY ====================
 with tab_earnings:
     st.subheader("🎯 MAG7 Earnings Overview")
     st.caption("Recent reported + upcoming earnings with EPS / Revenue / Surprise / Consensus")
@@ -392,25 +387,40 @@ with tab_earnings:
     earn_df = get_mag7_earnings_enhanced()
 
     if not earn_df.empty:
-        styled = earn_df.style\
+        # Pre-format numeric columns to strings to avoid format() crashes
+        df_display = earn_df.copy()
+        df_display['Last EPS'] = df_display['Last EPS'].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "N/A")
+        df_display['Consensus EPS'] = df_display['Consensus EPS'].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "N/A")
+        df_display['EPS Surprise %'] = df_display['EPS Surprise %'].apply(lambda x: f"{x:.1f}%" if pd.notna(x) else "N/A")
+        df_display['Revenue Surprise %'] = df_display['Revenue Surprise %'].apply(lambda x: f"{x:.1f}%" if pd.notna(x) else "N/A")
+        df_display['Last Revenue'] = df_display['Last Revenue'].apply(
+            lambda x: f"${x/1e9:.2f}B" if pd.notna(x) and x > 0 else "N/A"
+        )
+        df_display['Consensus Revenue'] = df_display['Consensus Revenue'].apply(
+            lambda x: f"${x/1e9:.2f}B" if pd.notna(x) and x > 0 else "N/A"
+        )
+
+        # Apply styling on the display DataFrame
+        styled = df_display.style\
             .background_gradient(cmap='RdYlGn', subset=['EPS Surprise %', 'Revenue Surprise %'])\
-            .background_gradient(cmap='RdYlGn_r', subset=['EPS Surprise %', 'Revenue Surprise %'], high=0) \
-            .applymap(lambda x: 'color:#00ff00; font-weight:bold' if isinstance(x, (int,float)) and x > 0 else
-                              'color:#ff4b4b; font-weight:bold' if isinstance(x, (int,float)) and x < 0 else '', 
-                      subset=['EPS Surprise %', 'Revenue Surprise %', 'Status'])\
-            .format({
-                'EPS Surprise %': '{:.1f}%',
-                'Revenue Surprise %': '{:.1f}%',
-                'Last EPS': '{:.2f}',
-                'Consensus EPS': '{:.2f}' if isinstance(x, (int,float)) else '{}'
-            }, na_rep="N/A")
+            .background_gradient(cmap='RdYlGn_r', subset=['EPS Surprise %', 'Revenue Surprise %'])\
+            .applymap(
+                lambda x: 'color:#00ff00; font-weight:bold' if isinstance(x, str) and '%' in x and float(x.strip('%')) > 0 else
+                          'color:#ff4b4b; font-weight:bold' if isinstance(x, str) and '%' in x and float(x.strip('%')) < 0 else '',
+                subset=['EPS Surprise %', 'Revenue Surprise %']
+            )\
+            .applymap(
+                lambda x: 'color:#00ff00;font-weight:bold' if x == "✅ Beat" else
+                          'color:#ff4b4b;font-weight:bold' if x == "❌ Miss" else '',
+                subset=['Status']
+            )
 
         st.dataframe(styled, hide_index=True, use_container_width=True)
 
         upcoming = earn_df[earn_df['Next Earnings'] != "Reported"]
         if not upcoming.empty:
             next_up = upcoming.iloc[0]
-            st.info(f"🚀 **Next reported:** {next_up['Asset']} on **{next_up['Next Earnings']}**")
+            st.info(f"🚀 **Next reported:** {next_up['Asset']} on **{next_up['Next Earnings']}")
     else:
         st.warning("MAG7 earnings data temporarily unavailable.")
 
