@@ -348,22 +348,6 @@ with tab_earnings:
         st.warning("Earnings data temporarily unavailable.")
 
 # ==================== ATH/ATL PLAYS TAB ====================
-with tab_extremes:
-    st.subheader("🔥 Yesterday's Earnings Near ATH / ATL")
-    st.caption("Reported yesterday • EPS Beat = Revenue Beat • Within 5% of 52-week high/low")
-
-    df_plays = get_ath_atl_earnings_plays()
-
-    if not df_plays.empty:
-        df_plays = df_plays.sort_values("Dist %")
-        styled = df_plays.style\
-            .background_gradient(cmap='RdYlGn', subset=['ROE %', 'Profit Margin %'])\
-            .background_gradient(cmap='RdYlGn_r', subset=['Debt/Eq'])\
-            .format({"Price": "${:.2f}", "Dist %": "{:.2f}%"})
-        st.dataframe(styled, hide_index=True, use_container_width=True)
-        st.success(f"Found **{len(df_plays)}** high-conviction plays!")
-    else:
-        st.info("No qualifying stocks from yesterday (beat/miss both + near extreme).")
 
 # ==================== NEWS ====================
 with tab_news:
