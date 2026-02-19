@@ -208,10 +208,70 @@ with tab3:
     pcr_df = pd.DataFrame([r for r in res if r])
     st.dataframe(pcr_df.style.background_gradient(subset=['PCR'], cmap='RdYlGn_r'), hide_index=True, use_container_width=True)
 
+# ========================== UPDATED DATA ENGINE (With Earnings) ==========================
+@st.cache_data(ttl=45)
+def fetch_market_snapshot():
+    symbols = list(ALL_TICKERS.values())
+    data = yf.download(symbols, period="5d", interval="1d", progress=False)
+    intra = yf.download(symbols, period="1d", interval="5m", prepost=True, progress=False)
+    
+    rows = []
+    for label, sym in ALL_TICKERS.items():
+        try:
+            price = intra['Close'][sym].dropna().iloc[-1]
+            prev_close = data['Close'][sym].iloc[-2]
+            change = ((price - prev_close) / prev_close) * 100
+            
+            today_vol = intra['Volume'][sym].sum()
+            avg_vol = data['Volume'][sym].iloc[-5:-1].mean()
+            rvol = today_vol / avg_vol if avg_vol > 0 else 1.0
+            
+            # --- NEW: Earnings Check ---
+            earnings_date = "---"
+            try:
+                tk = yf.Ticker(sym)
+                cal = tk.calendar
+                if cal is not None and 'Earnings Date' in cal:
+                    e_date = cal['Earnings Date'][0]
+                    days_to = (e_date.date() - datetime.date.today()).days
+                    if 0 <= days_to <= 2:
+                        earnings_date = f"⚠️ {days_to}d"
+            except: pass
+            
+            rows.append({
+                "Asset": label, "Symbol": sym, "Price": price, 
+                "Change %": change, "RVOL": rvol, "Earnings": earnings_date
+            })
+        except: continue
+    return pd.DataFrame(rows)
+
+# ========================== UPDATED TAB 4 (Fix for KeyError) ==========================
 with tab4:
     target_analyst = st.selectbox("Analyst Focus", list(MAG7_TICKERS.keys()))
-    recs = yf.Ticker(MAG7_TICKERS[target_analyst]).recommendations
-    if recs is not None and not recs.empty:
-        filtered = recs[recs['Firm'].str.contains('|'.join(TIER_1_BANKS), case=False, na=False)].tail(10)
-        st.table(filtered[['Firm', 'To Grade', 'Action']])
-    else: st.info("No recent Tier 1 updates for this asset.")
+    try:
+        tk = yf.Ticker(MAG7_TICKERS[target_analyst])
+        recs = tk.recommendations
+        
+        if recs is not None and not recs.empty:
+            # Dynamically find the firm/analyst column
+            col_map = {col.lower(): col for col in recs.columns}
+            firm_col = None
+            for candidate in ['firm', 'name', 'analyst', 'company']:
+                if candidate in col_map:
+                    firm_col = col_map[candidate]
+                    break
+            
+            if firm_col:
+                # Filter for Tier 1 Banks
+                filtered = recs[recs[firm_col].str.contains('|'.join(TIER_1_BANKS), case=False, na=False)].tail(10)
+                if not filtered.empty:
+                    st.table(filtered.sort_index(ascending=False))
+                else:
+                    st.info("No recent Tier 1 Analyst moves for this asset.")
+            else:
+                st.write("Recent Activity (All Firms):")
+                st.dataframe(recs.tail(10), use_container_width=True)
+        else:
+            st.info("No analyst data found for this ticker.")
+    except Exception as e:
+        st.error(f"Could not load analyst data: {e}")
