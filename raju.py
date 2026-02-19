@@ -267,37 +267,123 @@ with tab_sectors:
     )
 
 # ==================== GEX TAB ====================
+# ==================== GEX TAB ====================
 with tab_gex:
-    gex_ticker = st.selectbox("Analyze GEX", ["SPY", "QQQ", "NVDA", "AAPL", "TSLA"])
-    tk = yf.Ticker(gex_ticker)
-    spot = tk.history(period="1d")['Close'].iloc[-1]
-    all_chains = []
-    for exp in tk.options[:2]:
-        try:
-            ch = tk.option_chain(exp)
-            c, p = ch.calls, ch.puts
-            c['type'], p['type'] = 'call', 'put'
-            c['exp'], p['exp'] = exp, exp
-            all_chains.extend([c, p])
-        except:
-            continue
-    if all_chains:
-        df_g = pd.concat(all_chains)
-        df_g['dte'] = (pd.to_datetime(df_g['exp']).dt.tz_localize(None) - datetime.datetime.now()).dt.days / 365
+    st.subheader("📊 Gamma Exposure (GEX) Analysis")
+    
+    # Dynamic ticker input - user can enter ANY symbol (upper case)
+    user_ticker = st.text_input(
+        "Enter Ticker Symbol for GEX (e.g. SPY, QQQ, NVDA, AAPL, TSLA, XLK, IWM...)", 
+        value="SPY",
+        help="Most liquid underlyings work best (SPY, QQQ, MAG7, sector ETFs). Less liquid stocks may have sparse/no options data."
+    ).upper().strip()
+    
+    if not user_ticker:
+        st.info("Enter a valid ticker symbol to analyze GEX.")
+        st.stop()
+    
+    try:
+        tk = yf.Ticker(user_ticker)
+        # Quick check if options exist
+        options = tk.options
+        if not options:
+            st.warning(f"No options chain available for {user_ticker}. Try a stock/ETF with active options (e.g. SPY, NVDA).")
+            st.stop()
+        
+        # Get current spot price
+        spot = tk.history(period="1d")['Close'].iloc[-1]
+        spot = round(spot, 2)
+        
+        st.write(f"**Current Price:** ${spot}")
+        
+        all_chains = []
+        # Use only the nearest 2-3 expirations to keep it fast and relevant (weekly/monthly)
+        for exp in options[:3]:
+            try:
+                ch = tk.option_chain(exp)
+                c, p = ch.calls, ch.puts
+                c = c.assign(type='call', exp=exp)
+                p = p.assign(type='put', exp=exp)
+                all_chains.extend([c, p])
+            except:
+                continue
+        
+        if not all_chains:
+            st.warning(f"No usable options data found for {user_ticker} in near-term expirations.")
+            st.stop()
+        
+        df_g = pd.concat(all_chains, ignore_index=True)
+        
+        # Calculate days to expiration
+        df_g['dte'] = (pd.to_datetime(df_g['exp']).dt.tz_localize(None) - datetime.datetime.now()).dt.days / 365.0
+        
+        # Gamma Exposure calculation (vectorized)
         df_g['GEX'] = calc_gamma_vectorized(
-            spot, df_g['strike'].values, df_g['dte'].values,
-            df_g['impliedVolatility'].values, 0.04, 0.01,
-            df_g['type'].values, df_g['openInterest'].values
+            S=spot,
+            K=df_g['strike'].values,
+            T=df_g['dte'].values,
+            v=df_g['impliedVolatility'].values,
+            r=0.04,      # risk-free rate approx
+            q=0.01,      # dividend yield approx (adjust if needed)
+            types=df_g['type'].values,
+            OI=df_g['openInterest'].values
         )
+        
+        # Aggregate net GEX by strike (in millions)
         df_agg = df_g.groupby('strike')['GEX'].sum() / 1e6
+        df_agg = df_agg[df_agg.abs() > 0.01]  # filter tiny noise
+        
+        # Sort strikes for clean bar chart
+        df_agg = df_agg.sort_index()
+        
+        # Color: positive = call gamma (green), negative = put gamma (red)
+        colors = ['green' if x > 0 else 'red' for x in df_agg.values]
+        
         fig_gex = go.Figure(go.Bar(
             x=df_agg.index,
             y=df_agg.values,
-            marker_color=['green' if x > 0 else 'red' for x in df_agg.values]
+            marker_color=colors,
+            hovertemplate='Strike: $%{x}<br>Net GEX: %{y:.2f}M<extra></extra>'
         ))
-        fig_gex.add_vline(x=spot, line_dash="dash", line_color="white")
-        fig_gex.update_layout(template="plotly_dark", title=f"{gex_ticker} Net Gamma Walls")
+        
+        # Add spot price line
+        fig_gex.add_vline(x=spot, line_dash="dash", line_color="white", annotation_text=f"Spot ${spot}")
+        
+        # Layout
+        fig_gex.update_layout(
+            template="plotly_dark",
+            title=f"{user_ticker} Net Gamma Exposure (Near-Term: {len(options[:3])} Expiries)",
+            xaxis_title="Strike Price",
+            yaxis_title="Net GEX ($M)",
+            bargap=0.05,
+            height=600
+        )
+        
         st.plotly_chart(fig_gex, use_container_width=True)
+        
+        # Optional: Show top gamma walls
+        st.subheader("🔼 Top Positive / Negative Gamma Levels")
+        top_pos = df_agg[df_agg > 0].nlargest(10)
+        top_neg = df_agg[df_agg < 0].nsmallest(10)
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write("**Positive Gamma Walls (Support)**")
+            if not top_pos.empty:
+                st.dataframe(top_pos.reset_index().rename(columns={'strike': 'Strike', 0: 'GEX ($M)'}).round(2))
+            else:
+                st.info("No significant positive gamma")
+        
+        with col2:
+            st.write("**Negative Gamma Walls (Resistance)**")
+            if not top_neg.empty:
+                st.dataframe(top_neg.reset_index().rename(columns={'strike': 'Strike', 0: 'GEX ($M)'}).round(2))
+            else:
+                st.info("No significant negative gamma")
+                
+    except Exception as e:
+        st.error(f"Failed to fetch data for {user_ticker}. Error: {str(e)}")
+        st.info("Common issues: Invalid ticker, no options chain, or temporary yfinance API issue.")
 
 # ==================== OPTIONS TAB ====================
 with tab_options:
