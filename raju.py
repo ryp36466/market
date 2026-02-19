@@ -5,6 +5,8 @@ import numpy as np
 from streamlit_autorefresh import st_autorefresh
 import datetime
 import pytz
+import requests
+from bs4 import BeautifulSoup
 from finvizfinance.news import News
 import matplotlib.pyplot as plt
 import plotly.express as px
@@ -104,6 +106,78 @@ def fetch_market_snapshot():
             rows.append({"Asset": label, "Symbol": sym, "Price": price, "Change %": change, "RVOL": rvol})
         except: continue
     return pd.DataFrame(rows)
+
+# ========================== IMPROVED NEWS ENGINE ==========================
+def get_finviz_news_stable():
+    """Fetches news from Finviz using the library with a custom scraper fallback."""
+    try:
+        # Attempt 1: Using the finvizfinance library
+        f_news = News().get_news()
+        return f_news['news'][:15]
+    except Exception:
+        # Attempt 2: Direct Scraper Fallback if library fails
+        try:
+            headers = {'User-Agent': 'Mozilla/5.0'}
+            url = "https://finviz.com/news.ashx"
+            response = requests.get(url, headers=headers, timeout=5)
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            news_list = []
+            # Find the news table (class is often 'news')
+            rows = soup.find_all('tr', class_='nn')
+            for row in rows[:15]:
+                link_tag = row.find('a', class_='nn-tab-link')
+                source_tag = row.find('td', class_='nn-date') # often contains source/time
+                if link_tag:
+                    news_list.append({
+                        'Title': link_tag.text,
+                        'URL': link_tag['href'],
+                        'Source': source_tag.text if source_tag else "Finviz",
+                        'Date': "Live"
+                    })
+            return news_list
+        except:
+            return []
+
+def get_sentiment_score(text):
+    bull_words = ['upbeat', 'growth', 'surge', 'rally', 'beat', 'buy', 'bullish', 'expansion', 'profit', 'gain', 'positive', 'jump']
+    bear_words = ['slump', 'drop', 'fall', 'miss', 'sell', 'bearish', 'contraction', 'loss', 'negative', 'inflation', 'fear', 'risk', 'sink']
+    score = 0
+    text = text.lower()
+    for word in bull_words:
+        if word in text: score += 1
+    for word in bear_words:
+        if word in text: score -= 1
+    
+    if score > 0: return "🟢 Bullish", score
+    if score < 0: return "🔴 Bearish", score
+    return "⚪ Neutral", 0
+
+# ========================== UPDATED TAB 5 ==========================
+with tab5:
+    st.subheader("📰 Market News & Sentiment")
+    
+    # Use the stable fetcher
+    headlines = get_finviz_news_stable()
+    
+    if headlines:
+        total_score = 0
+        for item in headlines:
+            label, score = get_sentiment_score(item['Title'])
+            total_score += score
+            
+            with st.expander(f"{label} | {item['Title']}"):
+                st.write(f"**Source:** {item.get('Source', 'Finviz')}")
+                st.write(f"[Full Story]({item['URL']})")
+        
+        # Sidebar pulse update
+        st.sidebar.divider()
+        st.sidebar.metric("Sentiment Pulse", total_score, 
+                          delta="Positive" if total_score >= 0 else "Negative")
+    else:
+        st.error("News feed currently unavailable. Finviz might be limiting requests.")
+
+# ... [Keep rest of the GEX and Alpha Sector code] ...
 
 # ========================== MAIN UI ==========================
 market_df = fetch_market_snapshot()
