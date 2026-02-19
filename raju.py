@@ -129,8 +129,8 @@ def fetch_market_snapshot():
             continue
     return pd.DataFrame(rows), intra
 
-# ========================== MAG7 EARNINGS (enhanced with revenue & consensus) ==========================
-@st.cache_data(ttl=1800)  # 30 min cache
+# ========================== MAG7 EARNINGS ==========================
+@st.cache_data(ttl=1800)
 def get_mag7_earnings_enhanced():
     earnings_list = []
     est = pytz.timezone('US/Eastern')
@@ -139,7 +139,6 @@ def get_mag7_earnings_enhanced():
     for label, sym in MAG7_TICKERS.items():
         try:
             tk = yf.Ticker(sym)
-            info = tk.info or {}
             hist = tk.get_earnings_dates(limit=8)
 
             next_date = "TBD"
@@ -169,7 +168,6 @@ def get_mag7_earnings_enhanced():
                     if 'Estimate' in recent and pd.notna(recent['Estimate']):
                         consensus_eps = recent['Estimate']
 
-                    # Revenue fields (yfinance sometimes has them)
                     if 'Reported Revenue' in recent and pd.notna(recent['Reported Revenue']):
                         last_rev = recent['Reported Revenue']
                     if 'Revenue Estimate' in recent and pd.notna(recent['Revenue Estimate']):
@@ -185,22 +183,22 @@ def get_mag7_earnings_enhanced():
                 "Next Earnings": next_date if is_upcoming else "Reported",
                 "Last EPS": last_eps,
                 "Consensus EPS": consensus_eps,
-                "EPS Surprise %": eps_surprise,
+                "EPS Surprise": eps_surprise,          # numeric for gradient
                 "Last Revenue": last_rev,
                 "Consensus Revenue": consensus_rev,
-                "Revenue Surprise %": rev_surprise,
+                "Revenue Surprise": rev_surprise,      # numeric for gradient
                 "Status": status
             })
-        except Exception:
+        except:
             earnings_list.append({
                 "Asset": label,
                 "Next Earnings": "Error",
                 "Last EPS": np.nan,
                 "Consensus EPS": np.nan,
-                "EPS Surprise %": 0.0,
+                "EPS Surprise": 0.0,
                 "Last Revenue": np.nan,
                 "Consensus Revenue": np.nan,
-                "Revenue Surprise %": 0.0,
+                "Revenue Surprise": 0.0,
                 "Status": "—"
             })
 
@@ -379,7 +377,7 @@ with tab_options:
     else:
         st.info("Gathering options flow...")
 
-# ==================== EARNINGS – MAG7 ONLY ====================
+# ==================== EARNINGS – FIXED VERSION ====================
 with tab_earnings:
     st.subheader("🎯 MAG7 Earnings Overview")
     st.caption("Recent reported + upcoming earnings with EPS / Revenue / Surprise / Consensus")
@@ -387,27 +385,32 @@ with tab_earnings:
     earn_df = get_mag7_earnings_enhanced()
 
     if not earn_df.empty:
-        # Pre-format numeric columns to strings to avoid format() crashes
+        # Create display version with formatted strings
         df_display = earn_df.copy()
         df_display['Last EPS'] = df_display['Last EPS'].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "N/A")
         df_display['Consensus EPS'] = df_display['Consensus EPS'].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "N/A")
-        df_display['EPS Surprise %'] = df_display['EPS Surprise %'].apply(lambda x: f"{x:.1f}%" if pd.notna(x) else "N/A")
-        df_display['Revenue Surprise %'] = df_display['Revenue Surprise %'].apply(lambda x: f"{x:.1f}%" if pd.notna(x) else "N/A")
+        df_display['EPS Surprise'] = df_display['EPS Surprise'].apply(lambda x: f"{x:.1f}%" if pd.notna(x) else "N/A")
+        df_display['Revenue Surprise'] = df_display['Revenue Surprise'].apply(lambda x: f"{x:.1f}%" if pd.notna(x) else "N/A")
         df_display['Last Revenue'] = df_display['Last Revenue'].apply(
-            lambda x: f"${x/1e9:.2f}B" if pd.notna(x) and x > 0 else "N/A"
+            lambda x: f"${x/1e9:.2f}B" if pd.notna(x) and isinstance(x, (int, float)) and x > 0 else "N/A"
         )
         df_display['Consensus Revenue'] = df_display['Consensus Revenue'].apply(
-            lambda x: f"${x/1e9:.2f}B" if pd.notna(x) and x > 0 else "N/A"
+            lambda x: f"${x/1e9:.2f}B" if pd.notna(x) and isinstance(x, (int, float)) and x > 0 else "N/A"
         )
 
-        # Apply styling on the display DataFrame
+        # Apply gradient on NUMERIC columns (original earn_df)
+        numeric_styled = earn_df.style\
+            .background_gradient(cmap='RdYlGn', subset=['EPS Surprise', 'Revenue Surprise'])\
+            .background_gradient(cmap='RdYlGn_r', subset=['EPS Surprise', 'Revenue Surprise'])
+
+        # Transfer background styles to display df (via UUID trick or manual)
+        # Simplest: use .bar() on numeric values for visual effect without crashing
         styled = df_display.style\
-            .background_gradient(cmap='RdYlGn', subset=['EPS Surprise %', 'Revenue Surprise %'])\
-            .background_gradient(cmap='RdYlGn_r', subset=['EPS Surprise %', 'Revenue Surprise %'])\
+            .bar(subset=['EPS Surprise', 'Revenue Surprise'], color=['#d65f5f', '#5fba7d'], align='zero', width=70)\
             .applymap(
                 lambda x: 'color:#00ff00; font-weight:bold' if isinstance(x, str) and '%' in x and float(x.strip('%')) > 0 else
                           'color:#ff4b4b; font-weight:bold' if isinstance(x, str) and '%' in x and float(x.strip('%')) < 0 else '',
-                subset=['EPS Surprise %', 'Revenue Surprise %']
+                subset=['EPS Surprise', 'Revenue Surprise']
             )\
             .applymap(
                 lambda x: 'color:#00ff00;font-weight:bold' if x == "✅ Beat" else
