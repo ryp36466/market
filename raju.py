@@ -162,58 +162,7 @@ def get_earnings_data(ticker_dict: dict):
     return pd.DataFrame(earnings_list)
 
 # ========================== ATH/ATL PLAYS ==========================
-def get_ath_atl_earnings_plays():
-    yest = get_yesterdays_earnings()
-    results = []
-    for item in yest:
-        sym = item["Symbol"]
-        eps_beat = item.get("EPS Beat")
-        rev_beat = item.get("Revenue Beat")
-        if eps_beat is None or rev_beat is None:
-            continue
-        if not ((eps_beat and rev_beat) or (not eps_beat and not rev_beat)):
-            continue
 
-        try:
-            tk = yf.Ticker(sym)
-            info = tk.info
-            price = info.get('currentPrice') or info.get('regularMarketPrice') or tk.history(period="1d")['Close'].iloc[-1]
-            ath = info.get('fiftyTwoWeekHigh')
-            atl = info.get('fiftyTwoWeekLow')
-            if not ath or not atl:
-                continue
-
-            dist_ath = round((ath - price) / ath * 100, 2)
-            dist_atl = round((price - atl) / atl * 100, 2)
-            if dist_ath > 5 and dist_atl > 5:
-                continue
-
-            roe = info.get('returnOnEquity', 0)
-            debt_eq = info.get('debtToEquity', 999)
-            profit_m = info.get('profitMargins', 0)
-            strong = roe > 0.15 and debt_eq < 0.8 and profit_m > 0.15
-
-            near = "ATH" if dist_ath <= 5 else "ATL"
-            dist = dist_ath if near == "ATH" else dist_atl
-            rating = info.get('recommendationKey', 'N/A').title()
-
-            results.append({
-                "Ticker": sym,
-                "Company": item["Asset"][:40],
-                "Price": round(price, 2),
-                "Near": near,
-                "Dist %": dist,
-                "EPS Beat": "✅" if eps_beat else "❌",
-                "Revenue Beat": "✅" if rev_beat else "❌",
-                "ROE %": round(roe * 100, 1),
-                "Debt/Eq": round(debt_eq, 2),
-                "Profit Margin %": round(profit_m * 100, 1),
-                "Strong Fund.": "✅" if strong else "⚠️",
-                "Analyst Rating": rating
-            })
-        except:
-            continue
-    return pd.DataFrame(results)
 
 # ========================== NEWS ==========================
 def get_finviz_news_stable():
