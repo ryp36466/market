@@ -50,7 +50,7 @@ GLOBAL_TICKERS = {
     "VIX": "^VIX", 
     "10Y Yield": "^TNX", 
     "DXY": "DX-Y.NYB",
-    "S&P 500": "^GSPC"  # Added cash index (SPX)
+    "S&P 500": "^GSPC"
 }
 SECTOR_TICKERS = {"Tech (XLK)": "XLK", "Financials (XLF)": "XLF", "Energy (XLE)": "XLE", "Healthcare (XLV)": "XLV", "Disc (XLY)": "XLY", "Indus (XLI)": "XLI", "Utils (XLU)": "XLU", "RE": "XLRE", "Staples (XLP)": "XLP", "Materials (XLB)": "XLB"}
 MAG7_TICKERS = {"Apple": "AAPL", "MSFT": "MSFT", "Nvidia": "NVDA", "Amazon": "AMZN", "Google": "GOOGL", "Meta": "META", "Tesla": "TSLA"}
@@ -126,9 +126,51 @@ def fetch_market_snapshot():
             continue
     return pd.DataFrame(rows), intra
 
+# ========================== EARNINGS DATA ENGINE (IMPROVED) ==========================
+@st.cache_data(ttl=3600)
+def get_mag7_earnings():
+    earnings_list = []
+    now = pd.Timestamp.now(tz='America/New_York')
+    
+    for label, sym in MAG7_TICKERS.items():
+        try:
+            tk = yf.Ticker(sym)
+            hist = tk.get_earnings_dates(limit=12)  # Enough to catch past + near future
+            
+            next_date = "TBD"
+            latest_eps = "N/A"
+            surprise_pct = 0.0
+            status = "—"
+            
+            if hist is not None and not hist.empty:
+                # Future earnings (if announced)
+                future = hist[hist.index > now]
+                if not future.empty:
+                    next_date = future.index[0].strftime('%Y-%m-%d')
+                
+                # Most recent reported
+                reported = hist.dropna(subset=['Reported EPS'])
+                if not reported.empty:
+                    recent = reported.iloc[0]
+                    latest_eps = round(recent['Reported EPS'], 2)
+                    if 'Surprise(%)' in recent:
+                        surprise_pct = round(recent['Surprise(%)'], 2)
+                        status = "✅ Beat" if surprise_pct > 0 else "❌ Miss" if surprise_pct < 0 else "Met"
+            
+            earnings_list.append({
+                "Asset": label,
+                "Next Date": next_date,
+                "Last EPS": latest_eps,
+                "Surprise (%)": surprise_pct,
+                "Status": status
+            })
+        except:
+            continue
+    
+    return pd.DataFrame(earnings_list)
+
 # ========================== STABLE NEWS ENGINE ==========================
 def get_finviz_news_stable():
-    """Fetches news from Finviz: tries library first, falls back to robust scraper."""
     try:
         fnews = News()
         news_df = fnews.get_news()['news']
@@ -185,12 +227,12 @@ time_now = datetime.datetime.now(est).strftime('%H:%M:%S')
 st.title("🏛️ Alpha Terminal Pro")
 st.caption(f"EST {time_now} | Performance: STABLE")
 
-tab_overview, tab_sectors, tab_gex, tab_options, tab_inst, tab_news = st.tabs([
+tab_overview, tab_sectors, tab_gex, tab_options, tab_earnings, tab_news = st.tabs([
     "📈 Market Overview", 
     "🔥 Alpha Sectors", 
     "📊 GEX", 
     "🐳 Options", 
-    "🎯 Institutional", 
+    "🎯 Earnings",
     "📰 News Wire"
 ])
 
@@ -267,11 +309,9 @@ with tab_sectors:
     )
 
 # ==================== GEX TAB ====================
-# ==================== GEX TAB ====================
 with tab_gex:
     st.subheader("📊 Gamma Exposure (GEX) Analysis")
     
-    # Dynamic ticker input - user can enter ANY symbol (upper case)
     user_ticker = st.text_input(
         "Enter Ticker Symbol for GEX (e.g. SPY, QQQ, NVDA, AAPL, TSLA, XLK, IWM...)", 
         value="SPY",
@@ -284,20 +324,17 @@ with tab_gex:
     
     try:
         tk = yf.Ticker(user_ticker)
-        # Quick check if options exist
         options = tk.options
         if not options:
             st.warning(f"No options chain available for {user_ticker}. Try a stock/ETF with active options (e.g. SPY, NVDA).")
             st.stop()
         
-        # Get current spot price
         spot = tk.history(period="1d")['Close'].iloc[-1]
         spot = round(spot, 2)
         
         st.write(f"**Current Price:** ${spot}")
         
         all_chains = []
-        # Use only the nearest 2-3 expirations to keep it fast and relevant (weekly/monthly)
         for exp in options[:3]:
             try:
                 ch = tk.option_chain(exp)
@@ -314,29 +351,24 @@ with tab_gex:
         
         df_g = pd.concat(all_chains, ignore_index=True)
         
-        # Calculate days to expiration
         df_g['dte'] = (pd.to_datetime(df_g['exp']).dt.tz_localize(None) - datetime.datetime.now()).dt.days / 365.0
         
-        # Gamma Exposure calculation (vectorized)
         df_g['GEX'] = calc_gamma_vectorized(
             S=spot,
             K=df_g['strike'].values,
             T=df_g['dte'].values,
             v=df_g['impliedVolatility'].values,
-            r=0.04,      # risk-free rate approx
-            q=0.01,      # dividend yield approx (adjust if needed)
+            r=0.04,
+            q=0.01,
             types=df_g['type'].values,
             OI=df_g['openInterest'].values
         )
         
-        # Aggregate net GEX by strike (in millions)
         df_agg = df_g.groupby('strike')['GEX'].sum() / 1e6
-        df_agg = df_agg[df_agg.abs() > 0.01]  # filter tiny noise
+        df_agg = df_agg[df_agg.abs() > 0.01]
         
-        # Sort strikes for clean bar chart
         df_agg = df_agg.sort_index()
         
-        # Color: positive = call gamma (green), negative = put gamma (red)
         colors = ['green' if x > 0 else 'red' for x in df_agg.values]
         
         fig_gex = go.Figure(go.Bar(
@@ -346,10 +378,8 @@ with tab_gex:
             hovertemplate='Strike: $%{x}<br>Net GEX: %{y:.2f}M<extra></extra>'
         ))
         
-        # Add spot price line
         fig_gex.add_vline(x=spot, line_dash="dash", line_color="white", annotation_text=f"Spot ${spot}")
         
-        # Layout
         fig_gex.update_layout(
             template="plotly_dark",
             title=f"{user_ticker} Net Gamma Exposure (Near-Term: {len(options[:3])} Expiries)",
@@ -361,7 +391,6 @@ with tab_gex:
         
         st.plotly_chart(fig_gex, use_container_width=True)
         
-        # Optional: Show top gamma walls
         st.subheader("🔼 Top Positive / Negative Gamma Levels")
         top_pos = df_agg[df_agg > 0].nlargest(10)
         top_neg = df_agg[df_agg < 0].nsmallest(10)
@@ -398,16 +427,35 @@ with tab_options:
     else:
         st.info("Gathering options flow...")
 
-# ==================== INSTITUTIONAL TAB ====================
-with tab_inst:
-    st.subheader("🎯 Analyst Activity")
-    target_analyst = st.selectbox("Analyst Focus", list(MAG7_TICKERS.keys()))
-    try:
-        recs = yf.Ticker(MAG7_TICKERS[target_analyst]).recommendations
-        if recs is not None and not recs.empty:
-            st.dataframe(recs.tail(10), use_container_width=True)
-    except:
-        st.info("No analyst data available.")
+# ==================== EARNINGS TAB ====================
+with tab_earnings:
+    st.subheader("🎯 Magnificent 7 Earnings Intelligence")
+    st.caption("Recent EPS performance, surprise history, and upcoming report dates.")
+    
+    earn_df = get_mag7_earnings()
+    
+    if not earn_df.empty:
+        # Styling
+        styled_df = earn_df.style\
+            .background_gradient(cmap='RdYlGn', subset=['Surprise (%)'])\
+            .applymap(
+                lambda x: 'color: #00ff00; font-weight: bold;' if x == "✅ Beat" 
+                else ('color: #ff4b4b; font-weight: bold;' if x == "❌ Miss" else ''),
+                subset=['Status']
+            )
+        
+        st.dataframe(styled_df, hide_index=True, use_container_width=True)
+        
+        # Next catalyst highlight
+        upcoming = earn_df[earn_df['Next Date'] != "TBD"]
+        if not upcoming.empty:
+            next_up = upcoming.sort_values("Next Date").iloc[0]
+            days_left = (pd.to_datetime(next_up['Next Date']) - pd.Timestamp.now().date()).days
+            st.success(f"🚀 **Next Catalyst:** {next_up['Asset']} reports on **{next_up['Next Date']}** ({days_left} days)")
+        else:
+            st.info("No confirmed upcoming earnings dates at this time (common outside reporting season).")
+    else:
+        st.warning("Earnings data temporarily unavailable.")
 
 # ==================== NEWS TAB ====================
 with tab_news:
