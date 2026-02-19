@@ -17,13 +17,16 @@ st.set_page_config(page_title="Alpha Terminal Pro", page_icon="🏛️", layout=
 
 # ========================== PASSWORD PROTECTION ==========================
 def check_password():
-    if st.session_state.get("password_correct"): return True
+    if st.session_state.get("password_correct"):
+        return True
+
     def password_entered():
         if st.session_state["password"] == "Pratimap9!@":
             st.session_state["password_correct"] = True
             del st.session_state["password"]
         else:
             st.session_state["password_correct"] = False
+
     if "password_correct" not in st.session_state:
         st.title("🔐 Pro Market Access")
         st.text_input("Enter Password", type="password", on_change=password_entered, key="password")
@@ -34,7 +37,8 @@ def check_password():
         return False
     return True
 
-if not check_password(): st.stop()
+if not check_password():
+    st.stop()
 
 # ========================== TICKER CONFIGS ==========================
 GLOBAL_TICKERS = {
@@ -66,7 +70,8 @@ def get_pcr_data():
                 pcr = pv / cv if cv > 0 else 0
                 results.append({"Asset": label, "PCR": round(pcr, 2),
                                 "Sentiment": "🐂 Bull" if pcr < 0.85 else "🐻 Bear" if pcr > 1.15 else "⚖️ Neu"})
-        except: continue
+        except:
+            continue
     return pd.DataFrame(results)
 
 def get_sentiment_score(text):
@@ -100,10 +105,11 @@ def fetch_market_snapshot():
             avg_vol = data['Volume'][sym].iloc[-5:-1].mean()
             rvol = today_vol / avg_vol if avg_vol > 0 else 1.0
             rows.append({"Asset": label, "Symbol": sym, "Price": price, "Change %": change, "RVOL": rvol})
-        except: continue
+        except:
+            continue
     return pd.DataFrame(rows), intra
 
-# ========================== EARNINGS CALENDAR WITH BEAT FILTER ==========================
+# ========================== EARNINGS CALENDAR (Dynamic + Beat Filter) ==========================
 def get_earnings_calendar(date_str):
     url = f"https://api.nasdaq.com/api/calendar/earnings?date={date_str}"
     headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.nasdaq.com/"}
@@ -118,8 +124,8 @@ def get_earnings_calendar(date_str):
                 eps_est = row.get('epsForecast')
                 rev_act = row.get('revenueActual')
                 rev_est = row.get('revenueForecast')
-                eps_beat = eps_act > eps_est if isinstance(eps_act, (int,float)) and isinstance(eps_est, (int,float)) else None
-                rev_beat = rev_act > rev_est if isinstance(rev_act, (int,float)) and isinstance(rev_est, (int,float)) else None
+                eps_beat = eps_act > eps_est if isinstance(eps_act, (int, float)) and isinstance(eps_est, (int, float)) else None
+                rev_beat = rev_act > rev_est if isinstance(rev_act, (int, float)) and isinstance(rev_est, (int, float)) else None
                 rows.append({
                     "Asset": row.get('companyName', row['symbol']),
                     "Symbol": row['symbol'],
@@ -130,7 +136,7 @@ def get_earnings_calendar(date_str):
     except:
         return []
 
-def get_todays_earnings(): 
+def get_todays_earnings():
     est = pytz.timezone('US/Eastern')
     today = datetime.datetime.now(est).date().strftime('%Y-%m-%d')
     return get_earnings_calendar(today)
@@ -142,7 +148,6 @@ def get_yesterdays_earnings():
 
 @st.cache_data(ttl=3600)
 def get_earnings_data(ticker_dict: dict):
-    # Same as before for MAG7
     earnings_list = []
     est = pytz.timezone('US/Eastern')
     now = datetime.datetime.now(est)
@@ -160,7 +165,8 @@ def get_earnings_data(ticker_dict: dict):
                 future = hist[hist.index > now]
                 if not future.empty:
                     next_date = future.index[0].strftime('%Y-%m-%d')
-                    if next_date == today_str: is_today = True
+                    if next_date == today_str:
+                        is_today = True
                 reported = hist.dropna(subset=['Reported EPS'])
                 if not reported.empty:
                     recent = reported.iloc[0]
@@ -173,10 +179,11 @@ def get_earnings_data(ticker_dict: dict):
                 "Surprise (%)": surprise_pct, "Status": status,
                 "Today?": "📢 TODAY" if is_today else ""
             })
-        except: continue
+        except:
+            continue
     return pd.DataFrame(earnings_list)
 
-# ========================== ATH/ATL PLAYS (with beat filter) ==========================
+# ========================== ATH/ATL PLAYS ==========================
 def get_ath_atl_earnings_plays():
     yest = get_yesterdays_earnings()
     results = []
@@ -184,8 +191,10 @@ def get_ath_atl_earnings_plays():
         sym = item["Symbol"]
         eps_beat = item.get("EPS Beat")
         rev_beat = item.get("Revenue Beat")
-        if eps_beat is None or rev_beat is None: continue
-        if not ((eps_beat and rev_beat) or (not eps_beat and not rev_beat)): continue  # only both same
+        if eps_beat is None or rev_beat is None:
+            continue
+        if not ((eps_beat and rev_beat) or (not eps_beat and not rev_beat)):
+            continue
 
         try:
             tk = yf.Ticker(sym)
@@ -193,11 +202,13 @@ def get_ath_atl_earnings_plays():
             price = info.get('currentPrice') or info.get('regularMarketPrice') or tk.history(period="1d")['Close'].iloc[-1]
             ath = info.get('fiftyTwoWeekHigh')
             atl = info.get('fiftyTwoWeekLow')
-            if not ath or not atl: continue
+            if not ath or not atl:
+                continue
 
             dist_ath = round((ath - price) / ath * 100, 2)
             dist_atl = round((price - atl) / atl * 100, 2)
-            if dist_ath > 5 and dist_atl > 5: continue
+            if dist_ath > 5 and dist_atl > 5:
+                continue
 
             roe = info.get('returnOnEquity', 0)
             debt_eq = info.get('debtToEquity', 999)
@@ -206,7 +217,6 @@ def get_ath_atl_earnings_plays():
 
             near = "ATH" if dist_ath <= 5 else "ATL"
             dist = dist_ath if near == "ATH" else dist_atl
-
             rating = info.get('recommendationKey', 'N/A').title()
 
             results.append({
@@ -223,7 +233,8 @@ def get_ath_atl_earnings_plays():
                 "Strong Fund.": "✅" if strong else "⚠️",
                 "Analyst Rating": rating
             })
-        except: continue
+        except:
+            continue
     return pd.DataFrame(results)
 
 # ========================== NEWS ==========================
@@ -236,11 +247,13 @@ def get_finviz_news_stable():
             r = requests.get("https://finviz.com/news.ashx", headers=headers, timeout=10)
             soup = BeautifulSoup(r.text, "html.parser")
             table = soup.find("table", id="news-table")
-            if not table: return []
+            if not table:
+                return []
             news_list = []
             for row in table.find_all("tr")[:15]:
                 cells = row.find_all("td")
-                if len(cells) != 2: continue
+                if len(cells) != 2:
+                    continue
                 a = cells[1].find("a", class_="tab-link-news")
                 if a:
                     news_list.append({
@@ -250,7 +263,8 @@ def get_finviz_news_stable():
                         "Date": cells[0].text.strip()
                     })
             return news_list
-        except: return []
+        except:
+            return []
 
 # ========================== MAIN UI ==========================
 market_df, intra_data = fetch_market_snapshot()
@@ -310,7 +324,9 @@ with tab_gex:
         try:
             tk = yf.Ticker(user_ticker)
             options = tk.options
-            if not options: st.warning("No options chain found."); st.stop()
+            if not options:
+                st.warning("No options chain found.")
+                st.stop()
             spot = round(tk.history(period="1d")['Close'].iloc[-1], 2)
             st.write(f"**Current Price:** ${spot}")
             all_chains = []
@@ -343,27 +359,24 @@ with tab_options:
     else:
         st.info("Gathering options flow...")
 
-# ==================== EARNINGS TAB (BEAT FILTER + TODAY + YESTERDAY) ====================
+# ==================== EARNINGS TAB (TODAY + YESTERDAY + BEAT FILTER) ====================
 with tab_earnings:
     st.subheader("🎯 Earnings Intelligence")
-    st.caption("MAG7 + Stocks that reported **TODAY / YESTERDAY** where EPS Beat = Revenue Beat")
+    st.caption("MAG7 + Stocks reporting TODAY / YESTERDAY where EPS Beat = Revenue Beat")
 
     ticker_dict = MAG7_TICKERS.copy()
-    seen = set(MAG7_TICKERS.values())
+    seen_symbols = set(MAG7_TICKERS.values())   # Prevents duplicates
 
     for item in get_todays_earnings() + get_yesterdays_earnings():
         sym = item["Symbol"]
-        if sym and sym not in seen:
-            seen.add(sym)
+        if sym and sym not in seen_symbols:
+            seen_symbols.add(sym)
             ticker_dict[item["Asset"]] = sym
 
     earn_df = get_earnings_data(ticker_dict)
 
     if not earn_df.empty:
-        # Add beat columns for dynamic stocks
-        today_items = get_todays_earnings()
-        yesterday_items = get_yesterdays_earnings()
-        all_calendar = {item["Symbol"]: item for item in today_items + yesterday_items}
+        calendar_items = {item["Symbol"]: item for item in get_todays_earnings() + get_yesterdays_earnings()}
 
         earn_df["EPS Beat"] = ""
         earn_df["Revenue Beat"] = ""
@@ -372,13 +385,13 @@ with tab_earnings:
         for idx, row in earn_df.iterrows():
             asset = row["Asset"]
             sym = MAG7_TICKERS.get(asset) or ticker_dict.get(asset)
-            if sym in all_calendar:
-                cal = all_calendar[sym]
+            if sym in calendar_items:
+                cal = calendar_items[sym]
                 earn_df.at[idx, "EPS Beat"] = "✅" if cal.get("EPS Beat") else "❌" if cal.get("EPS Beat") is False else "—"
                 earn_df.at[idx, "Revenue Beat"] = "✅" if cal.get("Revenue Beat") else "❌" if cal.get("Revenue Beat") is False else "—"
-                earn_df.at[idx, "Reported"] = "📢 TODAY" if sym in [i["Symbol"] for i in today_items] else "📢 YESTERDAY"
+                earn_df.at[idx, "Reported"] = "📢 TODAY" if sym in [i["Symbol"] for i in get_todays_earnings()] else "📢 YESTERDAY"
 
-        # Filter: only both beat or both missed (for non-MAG7)
+        # Keep only rows where EPS Beat == Revenue Beat (for non-MAG7)
         def same_beat(row):
             e = row["EPS Beat"]
             r = row["Revenue Beat"]
@@ -388,7 +401,6 @@ with tab_earnings:
 
         earn_df = earn_df[earn_df.apply(same_beat, axis=1)]
 
-        # Sort & display
         earn_df['parsed'] = pd.to_datetime(earn_df['Next Date'], errors='coerce')
         earn_df = earn_df.sort_values('parsed', na_position='last').reset_index(drop=True)
 
@@ -424,7 +436,7 @@ with tab_extremes:
         st.dataframe(styled, hide_index=True, use_container_width=True)
         st.success(f"Found **{len(df_plays)}** high-conviction plays!")
     else:
-        st.info("No qualifying stocks (beat/miss both + near extreme) from yesterday.")
+        st.info("No qualifying stocks from yesterday (beat/miss both + near extreme).")
 
 # ==================== NEWS ====================
 with tab_news:
