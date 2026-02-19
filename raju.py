@@ -127,28 +127,32 @@ def fetch_market_snapshot():
     return pd.DataFrame(rows), intra
 
 # ========================== EARNINGS DATA ENGINE (IMPROVED) ==========================
+# ========================== EARNINGS DATA ENGINE (GENERAL + TODAY HIGHLIGHT) ==========================
 @st.cache_data(ttl=3600)
-def get_mag7_earnings():
+def get_earnings_data(ticker_dict: dict):
     earnings_list = []
-    now = pd.Timestamp.now(tz='America/New_York')
+    est = pytz.timezone('US/Eastern')
+    now = datetime.datetime.now(est)
+    today_str = now.strftime('%Y-%m-%d')
     
-    for label, sym in MAG7_TICKERS.items():
+    for label, sym in ticker_dict.items():
         try:
             tk = yf.Ticker(sym)
-            hist = tk.get_earnings_dates(limit=12)  # Enough to catch past + near future
+            hist = tk.get_earnings_dates(limit=12)
             
             next_date = "TBD"
             latest_eps = "N/A"
             surprise_pct = 0.0
             status = "—"
+            is_today = False
             
             if hist is not None and not hist.empty:
-                # Future earnings (if announced)
                 future = hist[hist.index > now]
                 if not future.empty:
                     next_date = future.index[0].strftime('%Y-%m-%d')
+                    if next_date == today_str:
+                        is_today = True
                 
-                # Most recent reported
                 reported = hist.dropna(subset=['Reported EPS'])
                 if not reported.empty:
                     recent = reported.iloc[0]
@@ -162,12 +166,113 @@ def get_mag7_earnings():
                 "Next Date": next_date,
                 "Last EPS": latest_eps,
                 "Surprise (%)": surprise_pct,
-                "Status": status
+                "Status": status,
+                "Today?": "📢 TODAY" if is_today else ""
             })
         except:
             continue
     
     return pd.DataFrame(earnings_list)
+
+# ========================== TODAY'S EARNINGS SCRAPER (FRESH, NO CACHE) ==========================
+def get_todays_earnings():
+    """Fetches top ~25 major stocks reporting earnings today from Nasdaq API (ordered by relevance/market cap)."""
+    est = pytz.timezone('US/Eastern')
+    today = datetime.datetime.now(est).date().strftime('%Y-%m-%d')
+    
+    url = f"https://api.nasdaq.com/api/calendar/earnings?date={today}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://www.nasdaq.com/"
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, timeout=15)
+        response.raise_for_status()
+        data = response.json()
+        
+        if data.get('data') and data['data'].get('rows'):
+            rows = data['data']['rows'][:25]  # Top 25 (Nasdaq prioritizes major names)
+            earnings = []
+            for row in rows:
+                symbol = row.get('symbol', '').replace('^', '').strip()
+                if symbol:
+                    company = row.get('companyName', symbol)
+                    earnings.append({"Asset": company, "Symbol": symbol})
+            return earnings
+        return []
+    except Exception:
+        return []
+
+# ==================== EARNINGS TAB (MAG7 FIXED + TODAY'S DYNAMIC) ====================
+with tab_earnings:
+    st.subheader("🎯 Earnings Intelligence")
+    st.caption("Magnificent 7 (always tracked) + Major stocks reporting earnings today (auto-added)")
+
+    # Always include MAG7
+    ticker_dict = MAG7_TICKERS.copy()
+    seen_symbols = set(MAG7_TICKERS.values())
+
+    # Dynamically add today's reporters (no duplicates)
+    todays_earnings = get_todays_earnings()
+    for item in todays_earnings:
+        sym = item["Symbol"]
+        if sym and sym not in seen_symbols:
+            seen_symbols.add(sym)
+            ticker_dict[item["Asset"]] = sym
+
+    # Fetch earnings data (cached for MAG7 stability, fresh today's via scraper)
+    earn_df = get_earnings_data(ticker_dict)
+
+    if not earn_df.empty:
+        # Today's reporters banner
+        today_reporters = earn_df[earn_df["Today?"] == "📢 TODAY"]["Asset"].tolist()
+        if today_reporters:
+            st.success(f"📢 **Reporting TODAY:** {', '.join(today_reporters)}")
+
+        # Sort: today's first, then upcoming dates, TBD last
+        earn_df['parsed'] = pd.to_datetime(earn_df['Next Date'], errors='coerce')
+        earn_df = earn_df.sort_values('parsed').reset_index(drop=True)
+
+        # Next overall catalyst
+        upcoming = earn_df[earn_df['parsed'].notna()]
+        if not upcoming.empty:
+            next_up = upcoming.iloc[0]
+            next_date_pd = next_up['parsed']
+            now_date = datetime.datetime.now(pytz.timezone('US/Eastern')).date()
+            days_left = (next_date_pd.date() - now_date).days
+
+            if days_left == 0:
+                day_text = "TODAY"
+            elif days_left == 1:
+                day_text = "tomorrow"
+            elif days_left < 0:
+                day_text = f"{abs(days_left)} days ago"
+            else:
+                day_text = f"in {days_left} days"
+
+            st.info(f"🚀 **Next Catalyst:** {next_up['Asset']} reports on **{next_up['Next Date']}** ({day_text})")
+
+        # Styled table (drop helper columns)
+        display_df = earn_df.drop(columns=["Today?", "parsed"])
+
+        styled_df = display_df.style\
+            .background_gradient(cmap='RdYlGn', subset=['Surprise (%)'])\
+            .applymap(
+                lambda x: 'color: #00ff00; font-weight: bold;' if x == "✅ Beat"
+                else ('color: #ff4b4b; font-weight: bold;' if x == "❌ Miss" else ''),
+                subset=['Status']
+            )\
+            .applymap(
+                lambda x: 'background-color: #ffff99; font-weight: bold; color: black;' 
+                if pd.to_datetime(x, errors='coerce') == pd.Timestamp(datetime.date.today()) else '',
+                subset=['Next Date']
+            )
+
+        st.dataframe(styled_df, hide_index=True, use_container_width=True)
+    else:
+        st.warning("Earnings data temporarily unavailable.")
 
 # ========================== STABLE NEWS ENGINE ==========================
 def get_finviz_news_stable():
