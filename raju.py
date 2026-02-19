@@ -16,29 +16,7 @@ from scipy.stats import norm
 st.set_page_config(page_title="Alpha Terminal Pro", page_icon="🏛️", layout="wide")
 
 # ========================== PASSWORD PROTECTION ==========================
-def check_password():
-    if st.session_state.get("password_correct"):
-        return True
 
-    def password_entered():
-        if st.session_state["password"] == "Pratimap9!@":
-            st.session_state["password_correct"] = True
-            del st.session_state["password"]
-        else:
-            st.session_state["password_correct"] = False
-
-    if "password_correct" not in st.session_state:
-        st.title("🔐 Pro Market Access")
-        st.text_input("Enter Password", type="password", on_change=password_entered, key="password")
-        return False
-    elif not st.session_state["password_correct"]:
-        st.text_input("Enter Password", type="password", on_change=password_entered, key="password")
-        st.error("😕 Access Denied")
-        return False
-    return True
-
-if not check_password():
-    st.stop()
 
 # ========================== TICKER CONFIGS ==========================
 GLOBAL_TICKERS = {
