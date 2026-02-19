@@ -15,27 +15,33 @@ from scipy.stats import norm
 # ========================== PAGE CONFIG ==========================
 st.set_page_config(page_title="Alpha Terminal Pro", page_icon="🏛️", layout="wide")
 
-# ========================== PASSWORD PROTECTION ==========================
+# ========================== PASSWORD PROTECTION (FIXED) ==========================
+# Initialize session state safely
+if "password_correct" not in st.session_state:
+    st.session_state.password_correct = False
+
 def check_password():
-    if st.session_state.get("password_correct"):
+    if st.session_state.get("password_correct", False):
         return True
 
     def password_entered():
-        if st.session_state["password"] == "Pratimap9!@":
-            st.session_state["password_correct"] = True
-            del st.session_state["password"]
+        # Safe access - no KeyError even if key not yet created
+        if st.session_state.get("password") == "Pratimap9!@":
+            st.session_state.password_correct = True
+            st.session_state.password = ""          # clear password
         else:
-            st.session_state["password_correct"] = False
+            st.session_state.password_correct = False
+            st.session_state.password = ""          # clear password
 
-    if "password_correct" not in st.session_state:
-        st.title("🔐 Pro Market Access")
-        st.text_input("Enter Password", type="password", on_change=password_entered, key="password")
-        return False
-    elif not st.session_state["password_correct"]:
-        st.text_input("Enter Password", type="password", on_change=password_entered, key="password")
-        st.error("😕 Access Denied")
-        return False
-    return True
+    st.title("🔐 Pro Market Access")
+    st.text_input("Enter Password", type="password", on_change=password_entered, key="password")
+
+    # Show error only after user tried (password field was filled and cleared)
+    if st.session_state.get("password_correct") is False and st.session_state.get("password") == "":
+        if "password" in st.session_state and st.session_state.password != "":
+            st.error("😕 Access Denied")
+
+    return False
 
 if not check_password():
     st.stop()
@@ -53,7 +59,7 @@ MAG7_TICKERS = {"Apple": "AAPL", "MSFT": "MSFT", "Nvidia": "NVDA", "Amazon": "AM
                 "Google": "GOOGL", "Meta": "META", "Tesla": "TSLA"}
 ALL_TICKERS = {**GLOBAL_TICKERS, **SECTOR_TICKERS, **MAG7_TICKERS}
 
-# ========================== CORE HELPERS ==========================
+# ========================== CORE HELPERS (with Gamma Flip + Options Sentiment) ==========================
 def get_pcr_data():
     targets = {**MAG7_TICKERS, "SPY": "SPY", "QQQ": "QQQ"}
     results = []
@@ -124,7 +130,7 @@ def fetch_market_snapshot():
             continue
     return pd.DataFrame(rows), intra
 
-# ========================== EARNINGS CALENDAR ==========================
+# ========================== EARNINGS, ATH/ATL, NEWS (unchanged) ==========================
 def get_earnings_calendar(date_str):
     url = f"https://api.nasdaq.com/api/calendar/earnings?date={date_str}"
     headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.nasdaq.com/"}
@@ -198,7 +204,6 @@ def get_earnings_data(ticker_dict: dict):
             continue
     return pd.DataFrame(earnings_list)
 
-# ========================== ATH/ATL PLAYS ==========================
 def get_ath_atl_earnings_plays():
     yest = get_yesterdays_earnings()
     results = []
@@ -210,7 +215,6 @@ def get_ath_atl_earnings_plays():
             continue
         if not ((eps_beat and rev_beat) or (not eps_beat and not rev_beat)):
             continue
-
         try:
             tk = yf.Ticker(sym)
             info = tk.info
@@ -219,21 +223,17 @@ def get_ath_atl_earnings_plays():
             atl = info.get('fiftyTwoWeekLow')
             if not ath or not atl:
                 continue
-
             dist_ath = round((ath - price) / ath * 100, 2)
             dist_atl = round((price - atl) / atl * 100, 2)
             if dist_ath > 5 and dist_atl > 5:
                 continue
-
             roe = info.get('returnOnEquity', 0)
             debt_eq = info.get('debtToEquity', 999)
             profit_m = info.get('profitMargins', 0)
             strong = roe > 0.15 and debt_eq < 0.8 and profit_m > 0.15
-
             near = "ATH" if dist_ath <= 5 else "ATL"
             dist = dist_ath if near == "ATH" else dist_atl
             rating = info.get('recommendationKey', 'N/A').title()
-
             results.append({
                 "Ticker": sym,
                 "Company": item["Asset"][:40],
@@ -252,7 +252,6 @@ def get_ath_atl_earnings_plays():
             continue
     return pd.DataFrame(results)
 
-# ========================== NEWS ==========================
 def get_finviz_news_stable():
     try:
         return News().get_news()['news'].head(15).to_dict('records')
@@ -331,7 +330,7 @@ with tab_sectors:
                  .style.background_gradient(cmap='RdYlGn', subset=['Change %', 'RVOL']),
                  hide_index=True, use_container_width=True)
 
-# ==================== GEX ====================
+# ==================== GEX (with Gamma Flip) ====================
 with tab_gex:
     st.subheader("📊 Gamma Exposure (GEX) Analysis + Gamma Flip")
     user_ticker = st.text_input("Enter Ticker for GEX", value="SPY").upper().strip()
@@ -361,7 +360,7 @@ with tab_gex:
             df_agg = (df_g.groupby('strike')['GEX'].sum() / 1e6).sort_index()
             df_agg = df_agg[df_agg.abs() > 0.01]
 
-            # ====================== GAMMA FLIP CALCULATION ======================
+            # Gamma Flip Calculation
             gamma_flip = spot
             if not df_agg.empty:
                 strikes = np.array(df_agg.index)
@@ -377,7 +376,6 @@ with tab_gex:
                     gamma_flip = strikes[np.argmin(np.abs(cum_gex))]
                 gamma_flip = round(gamma_flip, 2)
 
-            # Metrics
             col1, col2, col3 = st.columns(3)
             with col1:
                 st.metric("**Spot Price**", f"${spot}")
@@ -390,7 +388,6 @@ with tab_gex:
             if abs(spot - gamma_flip) <= 10:
                 st.warning(f"⚠️ **Price is very close to Gamma Flip (${gamma_flip})** → Expect chop / volatility expansion!")
 
-            # Plot
             fig = go.Figure(go.Bar(x=df_agg.index, y=df_agg.values,
                                    marker_color=['green' if x > 0 else 'red' for x in df_agg.values]))
             fig.add_vline(x=spot, line_dash="dash", line_color="white", annotation_text=f"Spot ${spot}")
@@ -404,7 +401,7 @@ with tab_gex:
         except Exception as e:
             st.error(f"Error: {str(e)}")
 
-# ==================== OPTIONS ====================
+# ==================== OPTIONS (with Buy Calls / Puts) ====================
 with tab_options:
     st.subheader("🐳 Put/Call Volume Ratio + Options Bias")
     pcr_df = get_pcr_data()
