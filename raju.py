@@ -15,8 +15,7 @@ from scipy.stats import norm
 # ========================== PAGE CONFIG ==========================
 st.set_page_config(page_title="Alpha Terminal Pro", page_icon="🏛️", layout="wide")
 
-# ========================== PASSWORD PROTECTION (FIXED) ==========================
-# Initialize session state safely
+# ========================== PASSWORD PROTECTION ==========================
 if "password_correct" not in st.session_state:
     st.session_state.password_correct = False
 
@@ -25,18 +24,16 @@ def check_password():
         return True
 
     def password_entered():
-        # Safe access - no KeyError even if key not yet created
         if st.session_state.get("password") == "Pratimap9!@":
             st.session_state.password_correct = True
-            st.session_state.password = ""          # clear password
+            st.session_state.password = ""
         else:
             st.session_state.password_correct = False
-            st.session_state.password = ""          # clear password
+            st.session_state.password = ""
 
     st.title("🔐 Pro Market Access")
     st.text_input("Enter Password", type="password", on_change=password_entered, key="password")
 
-    # Show error only after user tried (password field was filled and cleared)
     if st.session_state.get("password_correct") is False and st.session_state.get("password") == "":
         if "password" in st.session_state and st.session_state.password != "":
             st.error("😕 Access Denied")
@@ -59,7 +56,7 @@ MAG7_TICKERS = {"Apple": "AAPL", "MSFT": "MSFT", "Nvidia": "NVDA", "Amazon": "AM
                 "Google": "GOOGL", "Meta": "META", "Tesla": "TSLA"}
 ALL_TICKERS = {**GLOBAL_TICKERS, **SECTOR_TICKERS, **MAG7_TICKERS}
 
-# ========================== CORE HELPERS (with Gamma Flip + Options Sentiment) ==========================
+# ========================== CORE HELPERS ==========================
 def get_pcr_data():
     targets = {**MAG7_TICKERS, "SPY": "SPY", "QQQ": "QQQ"}
     results = []
@@ -119,18 +116,32 @@ def fetch_market_snapshot():
     rows = []
     for label, sym in ALL_TICKERS.items():
         try:
-            price = intra['Close'][sym].dropna().iloc[-1]
-            prev_close = data['Close'][sym].iloc[-2]
-            change = ((price - prev_close) / prev_close) * 100
-            today_vol = intra['Volume'][sym].sum()
-            avg_vol = data['Volume'][sym].iloc[-5:-1].mean()
-            rvol = today_vol / avg_vol if avg_vol > 0 else 1.0
-            rows.append({"Asset": label, "Symbol": sym, "Price": price, "Change %": change, "RVOL": rvol})
-        except:
-            continue
-    return pd.DataFrame(rows), intra
+            # More robust handling of missing data
+            if sym not in intra['Close'].columns or intra['Close'][sym].dropna().empty:
+                price = np.nan
+                today_vol = 0
+            else:
+                price = intra['Close'][sym].dropna().iloc[-1]
+                today_vol = intra['Volume'][sym].sum()
 
-# ========================== EARNINGS, ATH/ATL, NEWS (unchanged) ==========================
+            if sym not in data['Close'].columns or len(data['Close'][sym].dropna()) < 2:
+                prev_close = np.nan
+            else:
+                prev_close = data['Close'][sym].dropna().iloc[-2]
+
+            change = ((price - prev_close) / prev_close * 100) if pd.notna(price) and pd.notna(prev_close) else np.nan
+
+            avg_vol_series = data['Volume'][sym].dropna().iloc[-5:-1]
+            avg_vol = avg_vol_series.mean() if not avg_vol_series.empty else np.nan
+            rvol = today_vol / avg_vol if pd.notna(avg_vol) and avg_vol > 0 else 1.0
+
+            rows.append({"Asset": label, "Symbol": sym, "Price": price, "Change %": change, "RVOL": rvol})
+        except Exception:
+            rows.append({"Asset": label, "Symbol": sym, "Price": np.nan, "Change %": np.nan, "RVOL": 1.0})
+    df = pd.DataFrame(rows)
+    return df, intra
+
+# ========================== EARNINGS CALENDAR ==========================
 def get_earnings_calendar(date_str):
     url = f"https://api.nasdaq.com/api/calendar/earnings?date={date_str}"
     headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.nasdaq.com/"}
@@ -204,6 +215,7 @@ def get_earnings_data(ticker_dict: dict):
             continue
     return pd.DataFrame(earnings_list)
 
+# ========================== ATH/ATL PLAYS ==========================
 def get_ath_atl_earnings_plays():
     yest = get_yesterdays_earnings()
     results = []
@@ -215,6 +227,7 @@ def get_ath_atl_earnings_plays():
             continue
         if not ((eps_beat and rev_beat) or (not eps_beat and not rev_beat)):
             continue
+
         try:
             tk = yf.Ticker(sym)
             info = tk.info
@@ -223,17 +236,21 @@ def get_ath_atl_earnings_plays():
             atl = info.get('fiftyTwoWeekLow')
             if not ath or not atl:
                 continue
+
             dist_ath = round((ath - price) / ath * 100, 2)
             dist_atl = round((price - atl) / atl * 100, 2)
             if dist_ath > 5 and dist_atl > 5:
                 continue
+
             roe = info.get('returnOnEquity', 0)
             debt_eq = info.get('debtToEquity', 999)
             profit_m = info.get('profitMargins', 0)
             strong = roe > 0.15 and debt_eq < 0.8 and profit_m > 0.15
+
             near = "ATH" if dist_ath <= 5 else "ATL"
             dist = dist_ath if near == "ATH" else dist_atl
             rating = info.get('recommendationKey', 'N/A').title()
+
             results.append({
                 "Ticker": sym,
                 "Company": item["Asset"][:40],
@@ -252,6 +269,7 @@ def get_ath_atl_earnings_plays():
             continue
     return pd.DataFrame(results)
 
+# ========================== NEWS ==========================
 def get_finviz_news_stable():
     try:
         return News().get_news()['news'].head(15).to_dict('records')
@@ -299,6 +317,21 @@ with tab_overview:
     key_df = market_df[market_df['Asset'].isin(["S&P 500", "SPY", "QQQ"])][['Asset', 'Price', 'Change %', 'RVOL']].round(2)
     st.dataframe(key_df.style.background_gradient(cmap='RdYlGn', subset=['Change %', 'RVOL']), hide_index=True, use_container_width=True)
 
+    # ────────────────────────────── NEW: GLOBAL TICKERS SECTION ──────────────────────────────
+    st.subheader("🌍 Global & Macro Indicators")
+    global_df = market_df[market_df['Asset'].isin(GLOBAL_TICKERS.keys())].copy()
+    global_df = global_df.sort_values("Asset").reset_index(drop=True)
+    
+    st.dataframe(
+        global_df[['Asset', 'Price', 'Change %', 'RVOL']].round(2)
+            .style
+            .background_gradient(cmap='RdYlGn', subset=['Change %'])
+            .background_gradient(cmap='YlOrRd', subset=['RVOL'], high=0.7),
+        hide_index=True,
+        use_container_width=True
+    )
+    # ────────────────────────────────────────────────────────────────────────────────────────
+
     st.subheader("🚀 Magnificent 7")
     mag7_df = market_df[market_df['Asset'].isin(MAG7_TICKERS.keys())].copy().sort_values('Change %', ascending=False)
     spy_change = mag7_df[mag7_df['Asset'] == "SPY"]['Change %'].iloc[0] if not mag7_df[mag7_df['Asset'] == "SPY"].empty else 0
@@ -311,14 +344,14 @@ with tab_overview:
     cols = st.columns(3)
     for i, (ticker, name) in enumerate([('SPY','SPY'), ('QQQ','QQQ'), ('^GSPC','S&P 500')]):
         with cols[i]:
-            if ticker in intra_data['Close'].columns:
+            if ticker in intra_data['Close'].columns and not intra_data['Close'][ticker].dropna().empty:
                 fig = px.line(intra_data['Close'][ticker].dropna(), title=name)
                 fig.update_layout(template="plotly_dark", height=400)
                 st.plotly_chart(fig, use_container_width=True)
 
     selected_mag = st.selectbox("MAG7 Intraday Detail", list(MAG7_TICKERS.keys()))
     sym = MAG7_TICKERS[selected_mag]
-    if sym in intra_data['Close'].columns:
+    if sym in intra_data['Close'].columns and not intra_data['Close'][sym].dropna().empty:
         fig = px.line(intra_data['Close'][sym].dropna(), title=f"{selected_mag} Intraday")
         fig.update_layout(template="plotly_dark", height=500)
         st.plotly_chart(fig, use_container_width=True)
@@ -330,7 +363,7 @@ with tab_sectors:
                  .style.background_gradient(cmap='RdYlGn', subset=['Change %', 'RVOL']),
                  hide_index=True, use_container_width=True)
 
-# ==================== GEX (with Gamma Flip) ====================
+# ==================== GEX ====================
 with tab_gex:
     st.subheader("📊 Gamma Exposure (GEX) Analysis + Gamma Flip")
     user_ticker = st.text_input("Enter Ticker for GEX", value="SPY").upper().strip()
@@ -360,7 +393,6 @@ with tab_gex:
             df_agg = (df_g.groupby('strike')['GEX'].sum() / 1e6).sort_index()
             df_agg = df_agg[df_agg.abs() > 0.01]
 
-            # Gamma Flip Calculation
             gamma_flip = spot
             if not df_agg.empty:
                 strikes = np.array(df_agg.index)
@@ -401,7 +433,7 @@ with tab_gex:
         except Exception as e:
             st.error(f"Error: {str(e)}")
 
-# ==================== OPTIONS (with Buy Calls / Puts) ====================
+# ==================== OPTIONS ====================
 with tab_options:
     st.subheader("🐳 Put/Call Volume Ratio + Options Bias")
     pcr_df = get_pcr_data()
