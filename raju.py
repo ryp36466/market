@@ -385,12 +385,21 @@ with tab_earnings:
     earn_df = get_mag7_earnings_enhanced()
 
     if not earn_df.empty:
-        # Display version with formatted strings
+        # 1. Create display version with formatted strings
         df_display = earn_df.copy()
-        df_display['Last EPS'] = df_display['Last EPS'].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "N/A")
-        df_display['Consensus EPS'] = df_display['Consensus EPS'].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "N/A")
-        df_display['EPS Surprise'] = df_display['EPS Surprise'].apply(lambda x: f"{x:.1f}%" if pd.notna(x) else "N/A")
-        df_display['Revenue Surprise'] = df_display['Revenue Surprise'].apply(lambda x: f"{x:.1f}%" if pd.notna(x) else "N/A")
+
+        df_display['Last EPS'] = df_display['Last EPS'].apply(
+            lambda x: f"{x:.2f}" if pd.notna(x) else "N/A"
+        )
+        df_display['Consensus EPS'] = df_display['Consensus EPS'].apply(
+            lambda x: f"{x:.2f}" if pd.notna(x) else "N/A"
+        )
+        df_display['EPS Surprise'] = df_display['EPS Surprise'].apply(
+            lambda x: f"{x:.1f}%" if pd.notna(x) else "N/A"
+        )
+        df_display['Revenue Surprise'] = df_display['Revenue Surprise'].apply(
+            lambda x: f"{x:.1f}%" if pd.notna(x) else "N/A"
+        )
         df_display['Last Revenue'] = df_display['Last Revenue'].apply(
             lambda x: f"${x/1e9:.2f}B" if pd.notna(x) and x > 0 else "N/A"
         )
@@ -398,16 +407,27 @@ with tab_earnings:
             lambda x: f"${x/1e9:.2f}B" if pd.notna(x) and x > 0 else "N/A"
         )
 
-        # Apply visual bars on NUMERIC columns (original df)
+        # 2. Apply styling – but bar() only on the numeric original columns
+        #    We use the numeric values for bar length, but display the formatted strings
+
+        def bar_color(val, col_name):
+            if pd.isna(val):
+                return ''
+            pct = earn_df.loc[val.name, col_name]  # get numeric value
+            if pct > 0:
+                return 'background: linear-gradient(to right, transparent 0%, #5fba7d ' + str(min(pct*2, 100)) + '%)'
+            elif pct < 0:
+                return 'background: linear-gradient(to right, #d65f5f ' + str(min(abs(pct)*2, 100)) + '%, transparent 0%)'
+            return ''
+
         styled = df_display.style\
-            .bar(subset=['EPS Surprise', 'Revenue Surprise'], 
-                 color=['#d65f5f', '#5fba7d'], 
-                 align='zero', 
-                 vmin=-50, vmax=50,   # adjust range as needed
-                 width=80)\
+            .map(bar_color, subset=['EPS Surprise'], col_name='EPS Surprise')\
+            .map(bar_color, subset=['Revenue Surprise'], col_name='Revenue Surprise')\
             .applymap(
-                lambda x: 'color:#00ff00; font-weight:bold' if isinstance(x, str) and '%' in x and float(x.strip('%')) > 0 else
-                          'color:#ff4b4b; font-weight:bold' if isinstance(x, str) and '%' in x and float(x.strip('%')) < 0 else '',
+                lambda x: 'color:#00ff00; font-weight:bold' 
+                    if isinstance(x, str) and '%' in x and x != "N/A" and float(x.strip('%')) > 0 else
+                          'color:#ff4b4b; font-weight:bold' 
+                    if isinstance(x, str) and '%' in x and x != "N/A" and float(x.strip('%')) < 0 else '',
                 subset=['EPS Surprise', 'Revenue Surprise']
             )\
             .applymap(
