@@ -29,6 +29,7 @@ GLOBAL_TICKERS = {
 SECTOR_TICKERS = {
     "Tech (XLK)": "XLK", 
     "Software (IGV)": "IGV", 
+    "Semiconductor (SMH)": "SMH",
     "Financials (XLF)": "XLF", 
     "Energy (XLE)": "XLE",
     "Healthcare (XLV)": "XLV", 
