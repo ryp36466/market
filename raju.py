@@ -36,14 +36,14 @@ MAG7_TICKERS = {
 }
 ALL_TICKERS = {**GLOBAL_TICKERS, **SECTOR_TICKERS, **MAG7_TICKERS}
 
-# Huge-cap filter for earnings
 HUGE_CAP_SYMBOLS = {
     'WMT', 'BABA', 'DE', 'SO', 'NEM', 'BKNG', 'TXRH', 'RIO',
     'AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META', 'TSLA',
-    'T', 'VZ', 'XOM', 'CVX', 'JPM', 'BAC', 'WFC', 'PG', 'KO'
+    'T', 'VZ', 'XOM', 'CVX', 'JPM', 'BAC', 'WFC', 'PG', 'KO',
+    'HD', 'COST', 'NFLX', 'DIS', 'PFE', 'MRK', 'LLY', 'AVGO'
 }
 
-# Tier-1 analyst firms (used to filter upgrade/downgrade data)
+# Tier-1 analyst firms (used when firm name is available)
 TIER1_FIRMS = {
     'Goldman Sachs', 'Morgan Stanley', 'JPMorgan', 'Bank of America', 'Citigroup', 'Barclays',
     'Evercore', 'UBS', 'Jefferies', 'RBC Capital', 'Deutsche Bank', 'Wells Fargo',
@@ -52,9 +52,9 @@ TIER1_FIRMS = {
 }
 
 # ────────────────────────────────────────────────
-#  FINNHUB API KEY (shared for earnings + analyst upgrades/downgrades)
+#  FINNHUB API KEY (for earnings only now)
 # ────────────────────────────────────────────────
-FINNHUB_API_KEY = "d6au4n9r01qnr27itio0d6au4n9r01qnr27itiog"  # ← your key
+FINNHUB_API_KEY = "d6au4n9r01qnr27itio0d6au4n9r01qnr27itiog"
 
 # ────────────────────────────────────────────────
 #  EARNINGS – FINNHUB
@@ -69,17 +69,19 @@ def get_earnings_calendar_finnhub(date_str):
         fallback = []
         for item in data.get('earningsCalendar', []):
             symbol = item.get('symbol', '').upper()
+            rev_est = item.get('revenueEstimate')
+            rev_act = item.get('revenueActual')
             entry = {
                 "When": "",
                 "Symbol": symbol,
                 "Company": symbol,
                 "EPS Est": item.get('epsEstimate'),
                 "EPS Act": item.get('epsActual'),
-                "Rev Est (B)": item.get('revenueEstimate') / 1e9 if item.get('revenueEstimate') else None,
-                "Rev Act (B)": item.get('revenueActual') / 1e9 if item.get('revenueActual') else None,
+                "Rev Est (B)": round(rev_est / 1e9, 2) if rev_est is not None else "—",
+                "Rev Act (B)": round(rev_act / 1e9, 2) if rev_act is not None else "—",
             }
-            entry["EPS Beat"] = "✅ Beat" if (entry["EPS Act"] or 0) > (entry["EPS Est"] or 0) else "❌ Miss" if entry["EPS Act"] is not None else "—"
-            entry["Rev Beat"] = "✅ Beat" if (entry["Rev Act (B)"] or 0) > (entry["Rev Est (B)"] or 0) else "❌ Miss" if entry["Rev Act (B)"] is not None else "—"
+            entry["EPS Beat"] = "✅ Beat" if (entry["EPS Act"] or 0) > (entry["EPS Est"] or 0) else "❌ Miss" if entry["EPS Act"] is not None and entry["EPS Est"] is not None else "—"
+            entry["Rev Beat"] = "✅ Beat" if (entry["Rev Act (B)"] or 0) > (entry["Rev Est (B)"] or 0) else "❌ Miss" if entry["Rev Act (B)"] is not None and entry["Rev Est (B)"] is not None else "—"
             fallback.append(entry)
             if symbol in HUGE_CAP_SYMBOLS:
                 filtered.append(entry)
@@ -107,73 +109,58 @@ def get_tomorrows_earnings():
     return data
 
 # ────────────────────────────────────────────────
-#  ANALYST UPGRADES / DOWNGRADES – FINNHUB
+#  ANALYST RECOMMENDATION CHANGES – FREE via yfinance
 # ────────────────────────────────────────────────
-@st.cache_data(ttl=900)  # 15 min cache
-def get_analyst_changes_finnhub(days_back=5):
-    end_date = datetime.date.today()
-    start_date = end_date - datetime.timedelta(days=days_back)
-    from_str = start_date.strftime('%Y-%m-%d')
-    to_str   = end_date.strftime('%Y-%m-%d')
+@st.cache_data(ttl=900)
+def get_analyst_changes_yfinance(days_back=10):
+    symbols_to_check = list(HUGE_CAP_SYMBOLS)[:40]  # limit to avoid rate limit / timeout
 
-    url = f"https://finnhub.io/api/v1/stock/upgrade-downgrade?from={from_str}&to={to_str}&token={FINNHUB_API_KEY}"
+    all_changes = []
 
-    try:
-        r = requests.get(url, timeout=12)
-        r.raise_for_status()
-        data = r.json()
+    for symbol in symbols_to_check:
+        try:
+            tk = yf.Ticker(symbol)
+            rec = tk.recommendations
 
-        changes = []
-
-        for item in data:
-            symbol = item.get('symbol', '').upper()
-            firm   = item.get('gradeCompany', '').strip()
-
-            # Only keep Tier-1 firms
-            if firm not in TIER1_FIRMS:
+            if rec is None or rec.empty:
                 continue
 
-            grade_from = item.get('fromGrade', '').strip()
-            grade_to   = item.get('toGrade', '').strip()
+            # Keep only recent changes
+            rec = rec.tail(15)  # last 15 ratings
+            rec = rec[rec.index >= pd.Timestamp.now() - pd.Timedelta(days=days_back)]
 
-            # Determine action type
-            if grade_to.lower() in ['buy', 'outperform', 'overweight'] and grade_from.lower() not in ['buy', 'outperform', 'overweight']:
-                action = "Upgrade"
-            elif grade_to.lower() in ['sell', 'underperform', 'underweight'] and grade_from.lower() not in ['sell', 'underperform', 'underweight']:
-                action = "Downgrade"
-            else:
-                action = "Rating Change"
-
-            try:
-                tk = yf.Ticker(symbol)
-                mcap = tk.info.get('marketCap', 0) / 1_000_000_000
-                if mcap < 1:
-                    continue
-            except:
+            if rec.empty:
                 continue
 
-            changes.append({
-                "Date": item.get('gradeTime', 'N/A')[:10],
-                "Symbol": symbol,
-                "Company": item.get('companyName', symbol),
-                "Firm": firm,
-                "From": grade_from or "—",
-                "To": grade_to or "—",
-                "Action": action,
-                "Market Cap (B)": round(mcap, 1) if mcap else "—"
-            })
+            for idx, row in rec.iterrows():
+                firm = row.get('Firm', 'Unknown')
+                if firm not in TIER1_FIRMS and 'Unknown' not in firm:
+                    continue  # optional strict filter
 
-        df = pd.DataFrame(changes)
-        if not df.empty:
-            df = df.sort_values("Date", ascending=False).reset_index(drop=True)
-        return df
+                action = row.get('Action', 'Change')
+                from_grade = row.get('From Grade', '—')
+                to_grade   = row.get('To Grade', '—')
 
-    except Exception as e:
-        st.error(f"Finnhub analyst changes error: {e}")
-        return pd.DataFrame()
+                all_changes.append({
+                    "Date": idx.strftime('%Y-%m-%d'),
+                    "Symbol": symbol,
+                    "Firm": firm,
+                    "Action": action,
+                    "From": from_grade,
+                    "To": to_grade
+                })
+
+        except Exception:
+            continue
+
+    df = pd.DataFrame(all_changes)
+    if not df.empty:
+        df = df.sort_values("Date", ascending=False).reset_index(drop=True)
+        df = df.drop_duplicates(subset=["Date", "Symbol", "Firm", "To"])
+    return df
 
 # ────────────────────────────────────────────────
-#  OTHER HELPERS
+#  OTHER HELPERS (unchanged)
 # ────────────────────────────────────────────────
 
 def get_pcr_data():
@@ -267,11 +254,11 @@ est = pytz.timezone('US/Eastern')
 time_now = datetime.datetime.now(est).strftime('%H:%M:%S')
 
 st.title("🏛️ Alpha Terminal Pro")
-st.caption(f"EST {time_now} | Earnings & Analyst Changes via Finnhub")
+st.caption(f"EST {time_now} | Data as of {datetime.date.today()}")
 
 tab_overview, tab_sectors, tab_gex, tab_options, tab_earnings, tab_analyst, tab_extremes, tab_news = st.tabs([
     "📈 Market Overview", "🔥 Alpha Sectors", "📊 GEX", "🐳 Options",
-    "🎯 Earnings", "📊 Tier 1 Analyst Changes", "🔥 ATH/ATL Plays", "📰 News Wire"
+    "🎯 Earnings", "📊 Analyst Changes", "🔥 ATH/ATL Plays", "📰 News Wire"
 ])
 
 with tab_overview:
@@ -365,11 +352,11 @@ with tab_earnings:
         st.info("No earnings data fetched (check Finnhub API key or rate limit).")
 
 with tab_analyst:
-    st.subheader("📊 Tier 1 Analyst Upgrades / Downgrades – Last ~5 Days")
-    st.caption("Only Tier-1 firms • Market cap > $1 billion • Data from Finnhub API")
+    st.subheader("📊 Recent Analyst Recommendation Changes")
+    st.caption("From major stocks • Last ~10 days • Free data via yfinance • Tier-1 firms highlighted")
 
-    with st.spinner("Fetching analyst grade changes..."):
-        analyst_df = get_analyst_changes_finnhub(days_back=5)
+    with st.spinner("Loading analyst recommendations..."):
+        analyst_df = get_analyst_changes_yfinance(days_back=10)
 
     if not analyst_df.empty:
         def highlight_action(val):
@@ -380,13 +367,13 @@ with tab_analyst:
             return ''
 
         styled = analyst_df.style.applymap(highlight_action, subset=['Action']) \
-                                .format(precision=1, na_rep="—", subset=['Market Cap (B)'])
+                                .format(na_rep="—")
 
         st.dataframe(styled, hide_index=True, use_container_width=True)
 
-        st.success(f"Found {len(analyst_df)} qualifying changes")
+        st.success(f"Found {len(analyst_df)} recent recommendation entries")
     else:
-        st.info("No recent Tier-1 analyst grade changes found (or API/rate-limit issue).")
+        st.info("No recent analyst recommendation changes found (or yfinance fetch issue).")
 
 with tab_extremes:
     st.info("ATH/ATL scanner – coming soon")
@@ -409,4 +396,4 @@ with tab_news:
     else:
         st.error("News feed currently unavailable.")
 
-st_autorefresh(interval=300000, key="global_refresh")  # 5 minutes
+st_autorefresh(interval=300000, key="global_refresh")  # 5 min
