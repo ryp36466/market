@@ -378,7 +378,7 @@ with tab_analyst:
     st.caption("Tier-1 firms only • Stocks with market cap > $1 billion • Sourced from MarketBeat")
 
     with st.spinner("Loading recent analyst actions..."):
-        analyst_df = get_tier1_analyst_changes(days_back=3)
+        analyst_df = get_tier1_analyst_changes(days_back=5)
 
     if not analyst_df.empty:
         def highlight_action(val):
