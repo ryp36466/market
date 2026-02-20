@@ -36,83 +36,31 @@ MAG7_TICKERS = {
 }
 ALL_TICKERS = {**GLOBAL_TICKERS, **SECTOR_TICKERS, **MAG7_TICKERS}
 
-# Huge-cap filter for earnings
 HUGE_CAP_SYMBOLS = {
     'WMT', 'BABA', 'DE', 'SO', 'NEM', 'BKNG', 'TXRH', 'RIO',
     'AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META', 'TSLA',
-    'T', 'VZ', 'XOM', 'CVX', 'JPM', 'BAC', 'WFC', 'PG', 'KO'
+    'T', 'VZ', 'XOM', 'CVX', 'JPM', 'BAC', 'WFC', 'PG', 'KO',
+    'HD', 'COST', 'NFLX', 'DIS', 'PFE', 'MRK', 'LLY', 'AVGO'
+}
+
+# Tier-1 analyst firms (used when firm name is available)
+TIER1_FIRMS = {
+    'Goldman Sachs', 'Morgan Stanley', 'JPMorgan', 'Bank of America', 'Citigroup', 'Barclays',
+    'Evercore', 'UBS', 'Jefferies', 'RBC Capital', 'Deutsche Bank', 'Wells Fargo',
+    'BofA Securities', 'Credit Suisse', 'Bernstein', 'Piper Sandler', 'Oppenheimer',
+    'Wedbush', 'Stifel', 'Wolfe Research'
 }
 
 # ────────────────────────────────────────────────
-#  HELPERS
+#  FINNHUB API KEY (for earnings only now)
 # ────────────────────────────────────────────────
-
-def get_pcr_data():
-    targets = {**MAG7_TICKERS, "SPY": "SPY", "QQQ": "QQQ"}
-    results = []
-    for label, sym in targets.items():
-        try:
-            tk = yf.Ticker(sym)
-            cv = pv = 0
-            opts = tk.options
-            if opts:
-                for exp in opts[:2]:
-                    ch = tk.option_chain(exp)
-                    cv += ch.calls['volume'].sum()
-                    pv += ch.puts['volume'].sum()
-                pcr = pv / cv if cv > 0 else 0
-                results.append({
-                    "Asset": label,
-                    "PCR": round(pcr, 2),
-                    "Sentiment": "🐂 Bull" if pcr < 0.85 else "🐻 Bear" if pcr > 1.15 else "⚖️ Neu"
-                })
-        except:
-            continue
-    return pd.DataFrame(results)
-
-def get_sentiment_score(text):
-    bull = ['upbeat','growth','surge','rally','beat','buy','bullish','expansion','profit','gain','positive','jump']
-    bear = ['slump','drop','fall','miss','sell','bearish','contraction','loss','negative','inflation','fear','risk','sink']
-    score = sum(1 for w in bull if w in text.lower()) - sum(1 for w in bear if w in text.lower())
-    if score > 0: return "🟢 Bullish", score
-    if score < 0: return "🔴 Bearish", score
-    return "⚪ Neutral", 0
-
-def calc_gamma_vectorized(S, K, T, v, r, q, types, OI):
-    T = np.maximum(T, 1/365)
-    v = np.maximum(v, 0.01)
-    d1 = (np.log(S / K) + (r - q + 0.5 * v**2) * T) / (v * np.sqrt(T))
-    gamma = np.exp(-q * T) * norm.pdf(d1) / (S * v * np.sqrt(T))
-    val = (OI * 100) * (S**2) * 0.01 * gamma
-    return np.where(types == 'call', val, -val)
-
-@st.cache_data(ttl=45)
-def fetch_market_snapshot():
-    symbols = list(ALL_TICKERS.values())
-    data = yf.download(symbols, period="5d", interval="1d", progress=False)
-    intra = yf.download(symbols, period="1d", interval="5m", prepost=True, progress=False)
-    rows = []
-    for label, sym in ALL_TICKERS.items():
-        try:
-            price = intra['Close'][sym].dropna().iloc[-1] if sym in intra['Close'].columns and not intra['Close'][sym].dropna().empty else np.nan
-            prev_close = data['Close'][sym].iloc[-2] if sym in data['Close'].columns and len(data['Close'][sym].dropna()) >= 2 else np.nan
-            change = ((price - prev_close) / prev_close) * 100 if not np.isnan(price) and not np.isnan(prev_close) else np.nan
-            today_vol = intra['Volume'][sym].sum() if sym in intra['Volume'].columns else 0
-            avg_vol = data['Volume'][sym].iloc[-5:-1].mean() if sym in data['Volume'].columns and len(data['Volume'][sym].dropna()) >= 5 else 0
-            rvol = today_vol / avg_vol if avg_vol > 0 else np.nan
-            rows.append({"Asset": label, "Symbol": sym, "Price": round(price, 2) if not np.isnan(price) else "—",
-                         "Change %": round(change, 2) if not np.isnan(change) else "—",
-                         "RVOL": round(rvol, 2) if not np.isnan(rvol) else "—"})
-        except:
-            continue
-    return pd.DataFrame(rows), intra
+FINNHUB_API_KEY = "d6au4n9r01qnr27itio0d6au4n9r01qnr27itiog"
 
 # ────────────────────────────────────────────────
 #  EARNINGS – FINNHUB
 # ────────────────────────────────────────────────
 def get_earnings_calendar_finnhub(date_str):
-    API_KEY = "d6au4n9r01qnr27itio0d6au4n9r01qnr27itiog"
-    url = f"https://finnhub.io/api/v1/calendar/earnings?from={date_str}&to={date_str}&token={API_KEY}"
+    url = f"https://finnhub.io/api/v1/calendar/earnings?from={date_str}&to={date_str}&token={FINNHUB_API_KEY}"
     try:
         r = requests.get(url, timeout=10)
         r.raise_for_status()
@@ -161,8 +109,115 @@ def get_tomorrows_earnings():
     return data
 
 # ────────────────────────────────────────────────
-#  NEWS – FINVIZ
+#  ANALYST RECOMMENDATION CHANGES – FREE via yfinance
 # ────────────────────────────────────────────────
+@st.cache_data(ttl=900)
+def get_analyst_changes_yfinance(days_back=10):
+    symbols_to_check = list(HUGE_CAP_SYMBOLS)[:40]  # limit to avoid rate limit / timeout
+
+    all_changes = []
+
+    for symbol in symbols_to_check:
+        try:
+            tk = yf.Ticker(symbol)
+            rec = tk.recommendations
+
+            if rec is None or rec.empty:
+                continue
+
+            # Keep only recent changes
+            rec = rec.tail(15)  # last 15 ratings
+            rec = rec[rec.index >= pd.Timestamp.now() - pd.Timedelta(days=days_back)]
+
+            if rec.empty:
+                continue
+
+            for idx, row in rec.iterrows():
+                firm = row.get('Firm', 'Unknown')
+                if firm not in TIER1_FIRMS and 'Unknown' not in firm:
+                    continue  # optional strict filter
+
+                action = row.get('Action', 'Change')
+                from_grade = row.get('From Grade', '—')
+                to_grade   = row.get('To Grade', '—')
+
+                all_changes.append({
+                    "Date": idx.strftime('%Y-%m-%d'),
+                    "Symbol": symbol,
+                    "Firm": firm,
+                    "Action": action,
+                    "From": from_grade,
+                    "To": to_grade
+                })
+
+        except Exception:
+            continue
+
+    df = pd.DataFrame(all_changes)
+    if not df.empty:
+        df = df.sort_values("Date", ascending=False).reset_index(drop=True)
+        df = df.drop_duplicates(subset=["Date", "Symbol", "Firm", "To"])
+    return df
+
+# ────────────────────────────────────────────────
+#  OTHER HELPERS (unchanged)
+# ────────────────────────────────────────────────
+
+def get_pcr_data():
+    targets = {**MAG7_TICKERS, "SPY": "SPY", "QQQ": "QQQ"}
+    results = []
+    for label, sym in targets.items():
+        try:
+            tk = yf.Ticker(sym)
+            cv = pv = 0
+            opts = tk.options
+            if opts:
+                for exp in opts[:2]:
+                    ch = tk.option_chain(exp)
+                    cv += ch.calls['volume'].sum()
+                    pv += ch.puts['volume'].sum()
+                pcr = pv / cv if cv > 0 else 0
+                results.append({"Asset": label, "PCR": round(pcr, 2),
+                                "Sentiment": "🐂 Bull" if pcr < 0.85 else "🐻 Bear" if pcr > 1.15 else "⚖️ Neu"})
+        except:
+            continue
+    return pd.DataFrame(results)
+
+def get_sentiment_score(text):
+    bull = ['upbeat','growth','surge','rally','beat','buy','bullish','expansion','profit','gain','positive','jump']
+    bear = ['slump','drop','fall','miss','sell','bearish','contraction','loss','negative','inflation','fear','risk','sink']
+    score = sum(1 for w in bull if w in text.lower()) - sum(1 for w in bear if w in text.lower())
+    if score > 0: return "🟢 Bullish", score
+    if score < 0: return "🔴 Bearish", score
+    return "⚪ Neutral", 0
+
+def calc_gamma_vectorized(S, K, T, v, r, q, types, OI):
+    T = np.maximum(T, 1/365)
+    v = np.maximum(v, 0.01)
+    d1 = (np.log(S / K) + (r - q + 0.5 * v**2) * T) / (v * np.sqrt(T))
+    gamma = np.exp(-q * T) * norm.pdf(d1) / (S * v * np.sqrt(T))
+    val = (OI * 100) * (S**2) * 0.01 * gamma
+    return np.where(types == 'call', val, -val)
+
+@st.cache_data(ttl=45)
+def fetch_market_snapshot():
+    symbols = list(ALL_TICKERS.values())
+    data = yf.download(symbols, period="5d", interval="1d", progress=False)
+    intra = yf.download(symbols, period="1d", interval="5m", prepost=True, progress=False)
+    rows = []
+    for label, sym in ALL_TICKERS.items():
+        try:
+            price = intra['Close'][sym].dropna().iloc[-1]
+            prev_close = data['Close'][sym].iloc[-2]
+            change = ((price - prev_close) / prev_close) * 100
+            today_vol = intra['Volume'][sym].sum()
+            avg_vol = data['Volume'][sym].iloc[-5:-1].mean()
+            rvol = today_vol / avg_vol if avg_vol > 0 else 1.0
+            rows.append({"Asset": label, "Symbol": sym, "Price": price, "Change %": change, "RVOL": rvol})
+        except:
+            continue
+    return pd.DataFrame(rows), intra
+
 def get_finviz_news_stable():
     try:
         return News().get_news()['news'].head(15).to_dict('records')
@@ -201,68 +256,23 @@ time_now = datetime.datetime.now(est).strftime('%H:%M:%S')
 st.title("🏛️ Alpha Terminal Pro")
 st.caption(f"EST {time_now} | Data as of {datetime.date.today()}")
 
-tab_overview, tab_sectors, tab_gex, tab_options, tab_earnings, tab_extremes, tab_news = st.tabs([
+tab_overview, tab_sectors, tab_gex, tab_options, tab_earnings, tab_analyst, tab_extremes, tab_news = st.tabs([
     "📈 Market Overview", "🔥 Alpha Sectors", "📊 GEX", "🐳 Options",
-    "🎯 Earnings", "🔥 ATH/ATL Plays", "📰 News Wire"
+    "🎯 Earnings", "📊 Analyst Changes", "🔥 ATH/ATL Plays", "📰 News Wire"
 ])
 
 with tab_overview:
     st.subheader("🗝️ Key Indices")
+    key_df = market_df[market_df['Asset'].isin(["S&P 500", "SPY", "QQQ"])][['Asset', 'Price', 'Change %', 'RVOL']].round(2)
+    st.dataframe(key_df.style.background_gradient(cmap='RdYlGn', subset=['Change %', 'RVOL']), hide_index=True, use_container_width=True)
 
-    key_assets = [
-        ("S&P 500", "^GSPC"),
-        ("SPY", "SPY"),
-        ("QQQ", "QQQ"),
-        ("VIX", "^VIX"),
-        ("DXY", "DX-Y.NYB"),
-        ("ES (S&P Fut)", "ES=F"),
-        ("NQ (Nasdaq Fut)", "NQ=F"),
-        ("YM (Dow Fut)", "YM=F")
-    ]
-
-    rows = []
-    for name, sym in key_assets:
-        try:
-            # Prefer intraday price
-            if sym in intra_data['Close'].columns and not intra_data['Close'][sym].dropna().empty:
-                price = intra_data['Close'][sym].dropna().iloc[-1]
-            elif sym in data['Close'].columns and not data['Close'][sym].dropna().empty:
-                price = data['Close'][sym].dropna().iloc[-1]
-            else:
-                price = np.nan
-
-            # Previous close from daily data
-            prev_close = np.nan
-            if sym in data['Close'].columns and len(data['Close'][sym].dropna()) >= 2:
-                prev_close = data['Close'][sym].dropna().iloc[-2]
-
-            change_pct = ((price - prev_close) / prev_close * 100) if not np.isnan(price) and not np.isnan(prev_close) else np.nan
-            rvol = np.nan
-            if sym in intra_data['Volume'].columns:
-                today_vol = intra_data['Volume'][sym].sum()
-                avg_vol = data['Volume'][sym].iloc[-5:-1].mean() if len(data['Volume'][sym].dropna()) >= 5 else 0
-                rvol = today_vol / avg_vol if avg_vol > 0 else 1.0
-
-            rows.append({
-                "Asset": name,
-                "Symbol": sym,
-                "Price": round(price, 2) if not np.isnan(price) else "—",
-                "Change %": round(change_pct, 2) if not np.isnan(change_pct) else "—",
-                "RVOL": round(rvol, 2) if not np.isnan(rvol) else "—"
-            })
-        except:
-            continue
-
-    key_df = pd.DataFrame(rows)
-
-    if not key_df.empty:
-        st.dataframe(
-            key_df.style.background_gradient(cmap='RdYlGn', subset=['Change %', 'RVOL']),
-            hide_index=True,
-            use_container_width=True
-        )
-    else:
-        st.warning("No key index data available right now (Yahoo Finance may be rate-limited or market closed).")
+    st.subheader("🚀 Magnificent 7")
+    mag7_df = market_df[market_df['Asset'].isin(MAG7_TICKERS.keys())].copy().sort_values('Change %', ascending=False)
+    spy_change = mag7_df[mag7_df['Asset'] == "SPY"]['Change %'].iloc[0] if not mag7_df[mag7_df['Asset'] == "SPY"].empty else 0
+    mag7_df['vs SPY (%)'] = (mag7_df['Change %'] - spy_change).round(2)
+    st.dataframe(mag7_df[['Asset', 'Price', 'Change %', 'vs SPY (%)', 'RVOL']].round(2)
+                 .style.background_gradient(cmap='RdYlGn', subset=['Change %', 'vs SPY (%)', 'RVOL']),
+                 hide_index=True, use_container_width=True)
 
 with tab_sectors:
     sect_data = market_df[market_df['Asset'].isin(SECTOR_TICKERS.keys())].copy()
@@ -340,6 +350,30 @@ with tab_earnings:
         st.metric("Reports Shown", f"Today: {len(today_data)} | Yest: {len(yest_data)} | Tom: {len(tomorrow_data)}")
     else:
         st.info("No earnings data fetched (check Finnhub API key or rate limit).")
+
+with tab_analyst:
+    st.subheader("📊 Recent Analyst Recommendation Changes")
+    st.caption("From major stocks • Last ~10 days • Free data via yfinance • Tier-1 firms highlighted")
+
+    with st.spinner("Loading analyst recommendations..."):
+        analyst_df = get_analyst_changes_yfinance(days_back=10)
+
+    if not analyst_df.empty:
+        def highlight_action(val):
+            if "Upgrade" in val:
+                return 'background-color: #00cc66; color: black; font-weight: bold;'
+            if "Downgrade" in val:
+                return 'background-color: #ff4d4d; color: white; font-weight: bold;'
+            return ''
+
+        styled = analyst_df.style.applymap(highlight_action, subset=['Action']) \
+                                .format(na_rep="—")
+
+        st.dataframe(styled, hide_index=True, use_container_width=True)
+
+        st.success(f"Found {len(analyst_df)} recent recommendation entries")
+    else:
+        st.info("No recent analyst recommendation changes found (or yfinance fetch issue).")
 
 with tab_extremes:
     st.info("ATH/ATL scanner – coming soon")
