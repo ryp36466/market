@@ -109,65 +109,42 @@ def get_tomorrows_earnings():
 # ────────────────────────────────────────────────
 #  ANALYST UPGRADES / DOWNGRADES – FINNHUB
 # ────────────────────────────────────────────────
-@st.cache_data(ttl=900)  # 15 min cache
-def get_analyst_upgrades_downgrades_finnhub(days_back=5):
-    end_date = datetime.date.today()
-    start_date = end_date - datetime.timedelta(days=days_back)
-    from_str = start_date.strftime('%Y-%m-%d')
-    to_str   = end_date.strftime('%Y-%m-%d')
 
-    url = f"https://finnhub.io/api/v1/stock/upgrade-downgrade?from={from_str}&to={to_str}&token={FINNHUB_API_KEY}"
 
+
+# 1. Get a free key at https://www.alphavantage.co/support/#api-key
+ALPHA_VANTAGE_KEY = " I5FJOLRF7Z2DO1HB"
+
+@st.cache_data(ttl=3600)
+def get_reliable_earnings():
+    # This endpoint is specifically designed for developers, not scraped
+    url = f'https://www.alphavantage.co/query?function=EARNINGS_CALENDAR&horizon=3month&apikey={ALPHA_VANTAGE_KEY}'
+    
     try:
-        r = requests.get(url, timeout=12)
-        r.raise_for_status()
-        data = r.json()
-
-        changes = []
-
-        for item in data:
-            symbol = item.get('symbol', '').upper()
-            firm   = item.get('gradeCompany', '').strip()
-            if firm not in TIER1_FIRMS:
-                continue
-
-            # Skip if not upgrade or downgrade
-            grade_from = item.get('fromGrade', '')
-            grade_to   = item.get('toGrade', '')
-            action = "Upgrade" if "up" in grade_to.lower() or grade_to < grade_from else \
-                     "Downgrade" if "down" in grade_to.lower() or grade_to > grade_from else "Change"
-
-            if action == "Change":
-                continue  # optional: only show clear upgrades/downgrades
-
-            try:
-                tk = yf.Ticker(symbol)
-                mcap = tk.info.get('marketCap', 0) / 1_000_000_000
-                if mcap < 1:
-                    continue
-            except:
-                continue
-
-            changes.append({
-                "Date": item.get('gradeTime', '')[:10],  # YYYY-MM-DD
-                "Symbol": symbol,
-                "Company": item.get('companyName', symbol),
-                "Firm": firm,
-                "From": grade_from,
-                "To": grade_to,
-                "Action": action,
-                "Market Cap (B)": round(mcap, 1) if mcap else "—"
-            })
-
-        df = pd.DataFrame(changes)
-        if not df.empty:
-            df = df.sort_values("Date", ascending=False).reset_index(drop=True)
-        return df
-
+        with requests.Session() as s:
+            download = s.get(url)
+            decoded_content = download.content.decode('utf-8')
+            
+            # Alpha Vantage returns a CSV for this specific endpoint
+            import csv
+            cr = csv.reader(decoded_content.splitlines(), delimiter=',')
+            my_list = list(cr)
+            df = pd.DataFrame(my_list[1:], columns=my_list[0])
+            
+            # Filter for your specific "Huge Cap" list if desired
+            # df = df[df['symbol'].isin(HUGE_CAP_SYMBOLS)]
+            
+            return df
     except Exception as e:
-        st.error(f"Finnhub analyst changes error: {e}")
+        st.error(f"API Error: {e}")
         return pd.DataFrame()
 
+# Use it in your tab
+data = get_reliable_earnings()
+if not data.empty:
+    st.dataframe(data)
+else:
+    st.warning("Still no data. Check your API key or logs.")
 # ────────────────────────────────────────────────
 #  OTHER HELPERS (PCR, sentiment, gamma, market snapshot, news)
 # ────────────────────────────────────────────────
