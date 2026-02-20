@@ -28,136 +28,21 @@ MAG7_TICKERS = {"Apple": "AAPL", "MSFT": "MSFT", "Nvidia": "NVDA", "Amazon": "AM
                 "Google": "GOOGL", "Meta": "META", "Tesla": "TSLA"}
 ALL_TICKERS = {**GLOBAL_TICKERS, **SECTOR_TICKERS, **MAG7_TICKERS}
 
-# Huge / large-cap filter
+# Huge / large-cap filter for earnings
 HUGE_CAP_SYMBOLS = {
     'WMT', 'BABA', 'DE', 'SO', 'NEM', 'BKNG', 'TXRH', 'RIO',
     'AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META', 'TSLA',
     'T', 'VZ', 'XOM', 'CVX', 'JPM', 'BAC', 'WFC', 'PG', 'KO'
-    # Add more as needed
 }
 
-# ========================== FINNHUB EARNINGS CALENDAR ==========================
-def get_earnings_calendar_finnhub(date_str):
-    # ←←← REPLACE WITH YOUR REAL KEY
-    API_KEY = "d6au4n9r01qnr27itio0d6au4n9r01qnr27itiog"   # e.g. "c123abc456def789..."
+# Tier-1 analyst firms for the new tab
+TIER1_FIRMS = {
+    'Goldman Sachs', 'Morgan Stanley', 'JPMorgan', 'Bank of America', 'Citigroup', 'Barclays',
+    'Evercore', 'UBS', 'Jefferies', 'RBC Capital', 'Deutsche Bank', 'Wells Fargo', 'Credit Suisse',
+    'Bernstein', 'BofA Securities', 'Piper Sandler', 'Oppenheimer', 'Wedbush', 'Stifel'
+}
 
-    url = f"https://finnhub.io/api/v1/calendar/earnings?from={date_str}&to={date_str}&token={API_KEY}"
-    
-    try:
-        r = requests.get(url, timeout=10)
-        r.raise_for_status()
-        data = r.json()
-        
-        filtered_rows = []
-        all_rows = []  # fallback if no huge caps
-        
-        for item in data.get('earningsCalendar', []):
-            symbol = item.get('symbol', '').upper()
-            
-            entry = {
-                "When": "",
-                "Symbol": symbol,
-                "Company": item.get('symbol', symbol),  # Finnhub mainly gives symbol; improve with mapping if needed
-                "EPS Est": item.get('epsEstimate'),
-                "EPS Act": item.get('epsActual'),
-                "Rev Est (B)": item.get('revenueEstimate') / 1_000_000_000 if item.get('revenueEstimate') else None,
-                "Rev Act (B)": item.get('revenueActual') / 1_000_000_000 if item.get('revenueActual') else None,
-            }
-            
-            # Beat indicators
-            entry["EPS Beat"] = (
-                "✅ Beat" if (entry["EPS Act"] or 0) > (entry["EPS Est"] or 0)
-                else "❌ Miss" if entry["EPS Act"] is not None and entry["EPS Est"] is not None
-                else "—"
-            )
-            entry["Rev Beat"] = (
-                "✅ Beat" if (entry["Rev Act (B)"] or 0) > (entry["Rev Est (B)"] or 0)
-                else "❌ Miss" if entry["Rev Act (B)"] is not None and entry["Rev Est (B)"] is not None
-                else "—"
-            )
-            
-            all_rows.append(entry)
-            
-            if symbol in HUGE_CAP_SYMBOLS:
-                filtered_rows.append(entry)
-        
-        # Fallback: show all reporters if no huge caps that day
-        return filtered_rows if filtered_rows else all_rows
-    
-    except Exception as e:
-        st.error(f"Finnhub API error for {date_str}: {e}")
-        return []
-
-def get_todays_earnings():
-    est = pytz.timezone('US/Eastern')
-    today = datetime.datetime.now(est).date().strftime('%Y-%m-%d')
-    data = get_earnings_calendar_finnhub(today)
-    for d in data: d["When"] = "Today"
-    return data
-
-def get_yesterdays_earnings():
-    est = pytz.timezone('US/Eastern')
-    yesterday = (datetime.datetime.now(est) - datetime.timedelta(days=1)).date().strftime('%Y-%m-%d')
-    data = get_earnings_calendar_finnhub(yesterday)
-    for d in data: d["When"] = "Yesterday"
-    return data
-
-def get_tomorrows_earnings():
-    est = pytz.timezone('US/Eastern')
-    tomorrow = (datetime.datetime.now(est) + datetime.timedelta(days=1)).date().strftime('%Y-%m-%d')
-    data = get_earnings_calendar_finnhub(tomorrow)
-    for d in data: d["When"] = "Tomorrow"
-    return data
-
-# ========================== MAG7 UPCOMING (yfinance fallback) ==========================
-@st.cache_data(ttl=1800)
-def get_earnings_data(ticker_dict: dict):
-    earnings_list = []
-    est = pytz.timezone('US/Eastern')
-    now = datetime.datetime.now(est)
-    today_str = now.strftime('%Y-%m-%d')
-
-    for label, sym in ticker_dict.items():
-        next_date = "TBD"
-        latest_eps = "N/A"
-        surprise_pct = 0.0
-        status = "—"
-        is_today = False
-
-        try:
-            tk = yf.Ticker(sym)
-            hist = tk.get_earnings_dates(limit=12)
-
-            if hist is not None and not hist.empty:
-                future = hist[hist.index > now]
-                if not future.empty:
-                    next_date = future.index[0].strftime('%Y-%m-%d')
-                    if next_date == today_str:
-                        is_today = True
-
-                reported = hist.dropna(subset=['Reported EPS'])
-                if not reported.empty:
-                    recent = reported.iloc[0]
-                    latest_eps = round(recent['Reported EPS'], 2) if 'Reported EPS' in recent else "N/A"
-                    if 'Surprise(%)' in recent:
-                        surprise_pct = round(recent['Surprise(%)'], 2)
-                        status = "✅ Beat" if surprise_pct > 0 else "❌ Miss" if surprise_pct < 0 else "Met"
-
-        except Exception:
-            pass
-
-        earnings_list.append({
-            "Asset": label,
-            "Next Date": next_date,
-            "Last EPS": latest_eps,
-            "Surprise (%)": surprise_pct,
-            "Status": status,
-            "Today?": "📢 TODAY" if is_today else ""
-        })
-
-    return pd.DataFrame(earnings_list)
-
-# ========================== OTHER HELPERS (unchanged) ==========================
+# ========================== CORE HELPERS ==========================
 def get_pcr_data():
     targets = {**MAG7_TICKERS, "SPY": "SPY", "QQQ": "QQQ"}
     results = []
@@ -213,31 +98,130 @@ def fetch_market_snapshot():
             continue
     return pd.DataFrame(rows), intra
 
-def get_finviz_news_stable():
+# ========================== FINNHUB EARNINGS (placeholder – replace key) ==========================
+def get_earnings_calendar_finnhub(date_str):
+    API_KEY = "d6au4n9r01qnr27itio0d6au4n9r01qnr27itiog"  # ← Replace with real key
+    url = f"https://finnhub.io/api/v1/calendar/earnings?from={date_str}&to={date_str}&token={API_KEY}"
     try:
-        return News().get_news()['news'].head(15).to_dict('records')
-    except:
+        r = requests.get(url, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        filtered = []
+        all_rows = []
+        for item in data.get('earningsCalendar', []):
+            symbol = item.get('symbol', '').upper()
+            entry = {
+                "When": "",
+                "Symbol": symbol,
+                "Company": symbol,
+                "EPS Est": item.get('epsEstimate'),
+                "EPS Act": item.get('epsActual'),
+                "Rev Est (B)": item.get('revenueEstimate') / 1e9 if item.get('revenueEstimate') else None,
+                "Rev Act (B)": item.get('revenueActual') / 1e9 if item.get('revenueActual') else None,
+            }
+            entry["EPS Beat"] = "✅ Beat" if (entry["EPS Act"] or 0) > (entry["EPS Est"] or 0) else "❌ Miss" if entry["EPS Act"] is not None else "—"
+            entry["Rev Beat"] = "✅ Beat" if (entry["Rev Act (B)"] or 0) > (entry["Rev Est (B)"] or 0) else "❌ Miss" if entry["Rev Act (B)"] is not None else "—"
+            all_rows.append(entry)
+            if symbol in HUGE_CAP_SYMBOLS:
+                filtered.append(entry)
+        return filtered if filtered else all_rows
+    except Exception as e:
+        st.error(f"Finnhub error: {e}")
+        return []
+
+def get_todays_earnings():
+    today = datetime.datetime.now(pytz.timezone('US/Eastern')).date().strftime('%Y-%m-%d')
+    data = get_earnings_calendar_finnhub(today)
+    for d in data: d["When"] = "Today"
+    return data
+
+def get_yesterdays_earnings():
+    yesterday = (datetime.datetime.now(pytz.timezone('US/Eastern')) - datetime.timedelta(days=1)).date().strftime('%Y-%m-%d')
+    data = get_earnings_calendar_finnhub(yesterday)
+    for d in data: d["When"] = "Yesterday"
+    return data
+
+def get_tomorrows_earnings():
+    tomorrow = (datetime.datetime.now(pytz.timezone('US/Eastern')) + datetime.timedelta(days=1)).date().strftime('%Y-%m-%d')
+    data = get_earnings_calendar_finnhub(tomorrow)
+    for d in data: d["When"] = "Tomorrow"
+    return data
+
+# ========================== NEW: TIER 1 ANALYST CHANGES (LAST 3 DAYS) ==========================
+@st.cache_data(ttl=900)  # 15 minutes
+def get_tier1_analyst_changes(days_back=3):
+    start_date = datetime.date.today() - datetime.timedelta(days=days_back)
+    
+    # MarketBeat recent upgrades & downgrades pages
+    urls = [
+        "https://www.marketbeat.com/ratings/upgrades/",
+        "https://www.marketbeat.com/ratings/downgrades/"
+    ]
+    
+    changes = []
+    
+    for url in urls:
         try:
-            headers = {"User-Agent": "Mozilla/5.0"}
-            r = requests.get("https://finviz.com/news.ashx", headers=headers, timeout=10)
-            soup = BeautifulSoup(r.text, "html.parser")
-            table = soup.find("table", id="news-table")
-            if not table: return []
-            news_list = []
-            for row in table.find_all("tr")[:15]:
-                cells = row.find_all("td")
-                if len(cells) != 2: continue
-                a = cells[1].find("a", class_="tab-link-news")
-                if a:
-                    news_list.append({
-                        "Title": a.text.strip(),
-                        "URL": a["href"],
-                        "Source": cells[1].find("div", class_="news-link-right").get_text(strip=True).strip("() ") if cells[1].find("div", class_="news-link-right") else "Finviz",
-                        "Date": cells[0].text.strip()
-                    })
-            return news_list
-        except:
-            return []
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+            r = requests.get(url, headers=headers, timeout=12)
+            soup = BeautifulSoup(r.text, 'html.parser')
+            
+            table = soup.find('table', {'class': 'table'})
+            if not table:
+                continue
+                
+            rows = table.find_all('tr')[1:30]  # recent ones only
+            
+            for row in rows:
+                cols = row.find_all('td')
+                if len(cols) < 6:
+                    continue
+                    
+                date_str = cols[0].get_text(strip=True)
+                try:
+                    change_date = datetime.datetime.strptime(date_str.split()[0], '%m/%d/%Y').date()
+                    if change_date < start_date:
+                        continue
+                except:
+                    continue
+                
+                ticker_link = cols[1].find('a')
+                ticker = ticker_link.get_text(strip=True) if ticker_link else cols[1].get_text(strip=True)
+                
+                company = cols[2].get_text(strip=True)
+                firm = cols[3].get_text(strip=True)
+                action = cols[4].get_text(strip=True)
+                rating_change = cols[5].get_text(strip=True)
+                
+                if firm not in TIER1_FIRMS:
+                    continue
+                
+                try:
+                    tk = yf.Ticker(ticker)
+                    mcap = tk.info.get('marketCap', 0) / 1_000_000_000
+                    if mcap < 1:
+                        continue
+                except:
+                    continue
+                
+                changes.append({
+                    "Date": date_str,
+                    "Symbol": ticker,
+                    "Company": company,
+                    "Firm": firm,
+                    "Action": action,
+                    "Rating Change": rating_change,
+                    "Market Cap (B)": round(mcap, 1) if mcap else "—"
+                })
+                
+        except Exception as e:
+            st.warning(f"Analyst changes fetch issue: {e}")
+            continue
+    
+    df = pd.DataFrame(changes)
+    if not df.empty:
+        df = df.sort_values("Date", ascending=False).reset_index(drop=True)
+    return df
 
 # ========================== MAIN UI ==========================
 market_df, intra_data = fetch_market_snapshot()
@@ -245,12 +229,14 @@ est = pytz.timezone('US/Eastern')
 time_now = datetime.datetime.now(est).strftime('%H:%M:%S')
 
 st.title("🏛️ Alpha Terminal Pro")
-st.caption(f"EST {time_now} | Earnings via Finnhub (huge-cap priority + fallback)")
+st.caption(f"EST {time_now} | Data as of {datetime.date.today()}")
 
-tab_overview, tab_sectors, tab_gex, tab_options, tab_earnings, tab_extremes, tab_news = st.tabs([
+tabs = st.tabs([
     "📈 Market Overview", "🔥 Alpha Sectors", "📊 GEX", "🐳 Options",
-    "🎯 Earnings", "🔥 ATH/ATL Plays", "📰 News Wire"
+    "🎯 Earnings", "📊 Tier 1 Analyst Changes", "🔥 ATH/ATL Plays", "📰 News Wire"
 ])
+
+tab_overview, tab_sectors, tab_gex, tab_options, tab_earnings, tab_analyst, tab_extremes, tab_news = tabs
 
 with tab_overview:
     st.subheader("🗝️ Key Indices")
@@ -264,22 +250,6 @@ with tab_overview:
     st.dataframe(mag7_df[['Asset', 'Price', 'Change %', 'vs SPY (%)', 'RVOL']].round(2)
                  .style.background_gradient(cmap='RdYlGn', subset=['Change %', 'vs SPY (%)', 'RVOL']),
                  hide_index=True, use_container_width=True)
-
-    st.subheader("📉 Intraday Price Action")
-    cols = st.columns(3)
-    for i, (ticker, name) in enumerate([('SPY','SPY'), ('QQQ','QQQ'), ('^GSPC','S&P 500')]):
-        with cols[i]:
-            if ticker in intra_data['Close'].columns:
-                fig = px.line(intra_data['Close'][ticker].dropna(), title=name)
-                fig.update_layout(template="plotly_dark", height=400)
-                st.plotly_chart(fig, use_container_width=True)
-
-    selected_mag = st.selectbox("MAG7 Intraday Detail", list(MAG7_TICKERS.keys()))
-    sym = MAG7_TICKERS[selected_mag]
-    if sym in intra_data['Close'].columns:
-        fig = px.line(intra_data['Close'][sym].dropna(), title=f"{selected_mag} Intraday")
-        fig.update_layout(template="plotly_dark", height=500)
-        st.plotly_chart(fig, use_container_width=True)
 
 with tab_sectors:
     sect_data = market_df[market_df['Asset'].isin(SECTOR_TICKERS.keys())].copy()
@@ -340,7 +310,6 @@ with tab_earnings:
 
     if all_events:
         df = pd.DataFrame(all_events)
-        
         order = {"Yesterday": 0, "Today": 1, "Tomorrow": 2}
         df['sort_key'] = df['When'].map(order).fillna(999)
         df = df.sort_values(['sort_key', 'Symbol']).drop(columns=['sort_key'])
@@ -351,36 +320,37 @@ with tab_earnings:
             return ''
 
         styled = df.style.applymap(highlight_beats, subset=['EPS Beat', 'Rev Beat']) \
-                         .format(precision=2, na_rep="—", subset=[
-                             'EPS Est', 'EPS Act', 'Rev Est (B)', 'Rev Act (B)'
-                         ])
+                         .format(precision=2, na_rep="—", subset=['EPS Est', 'EPS Act', 'Rev Est (B)', 'Rev Act (B)'])
 
         st.dataframe(styled, hide_index=True, use_container_width=True)
 
         st.metric("Reports Shown", f"Today: {len(today_data)} | Yest: {len(yest_data)} | Tom: {len(tomorrow_data)}")
     else:
-        st.info("No earnings data fetched (check your Finnhub API key or rate limit).")
+        st.info("No earnings data fetched (check Finnhub API key).")
 
-    # MAG7 next catalyst
-    mag_next = get_earnings_data(MAG7_TICKERS)
+with tab_analyst:
+    st.subheader("📊 Tier 1 Analyst Upgrades / Downgrades – Last 3 Days")
+    st.caption("Tier-1 firms only • Stocks with market cap > $1 billion • Sourced from MarketBeat")
 
-    if not mag_next.empty and 'Next Date' in mag_next.columns:
-        upcoming = mag_next[
-            mag_next['Next Date'].notna() &
-            (mag_next['Next Date'] != "TBD")
-        ].copy()
+    with st.spinner("Loading recent analyst actions..."):
+        analyst_df = get_tier1_analyst_changes(days_back=3)
 
-        if not upcoming.empty:
-            upcoming['Next Date dt'] = pd.to_datetime(upcoming['Next Date'], errors='coerce')
-            upcoming = upcoming.sort_values('Next Date dt').reset_index(drop=True)
-            next_c = upcoming.iloc[0]
-            days = (next_c['Next Date dt'].date() - datetime.datetime.now(est).date()).days
-            day_txt = "TODAY" if days == 0 else "tomorrow" if days == 1 else f"in {days} days" if days > 0 else f"{abs(days)} days ago"
-            st.info(f"🚀 **Next MAG7 catalyst:** {next_c['Asset']} on **{next_c['Next Date']}** ({day_txt})")
-        else:
-            st.info("No upcoming MAG7 earnings dates right now.")
+    if not analyst_df.empty:
+        def highlight_action(val):
+            if "Upgrade" in val:
+                return 'background-color: #00cc66; color: black; font-weight: bold;'
+            if "Downgrade" in val:
+                return 'background-color: #ff4d4d; color: white; font-weight: bold;'
+            return ''
+
+        styled = analyst_df.style.applymap(highlight_action, subset=['Action']) \
+                                .format(precision=1, na_rep="—", subset=['Market Cap (B)'])
+
+        st.dataframe(styled, hide_index=True, use_container_width=True)
+
+        st.success(f"Found {len(analyst_df)} qualifying changes")
     else:
-        st.info("MAG7 upcoming data unavailable (yfinance fetch issue).")
+        st.info("No recent Tier-1 analyst changes found for billion-dollar+ stocks (or data fetch issue).")
 
 with tab_extremes:
     st.info("ATH/ATL scanner – coming soon")
@@ -403,4 +373,4 @@ with tab_news:
     else:
         st.error("News feed currently unavailable.")
 
-st_autorefresh(interval=30000, key="global_refresh")
+st_autorefresh(interval=300000, key="global_refresh")  # 5 min
