@@ -165,27 +165,34 @@ def get_tomorrows_earnings():
     data = get_earnings_for_date(tomorrow)
     for d in data: d["When"] = "Tomorrow"
     return data
-
 @st.cache_data(ttl=1800)
 def get_earnings_data(ticker_dict: dict):
     earnings_list = []
     est = pytz.timezone('US/Eastern')
     now = datetime.datetime.now(est)
+    today_str = now.strftime('%Y-%m-%d')
+
     for label, sym in ticker_dict.items():
+        # Define defaults FIRST — prevents UnboundLocalError
+        next_date = "TBD"
+        latest_eps = "N/A"
+        surprise_pct = 0.0
+        status = "—"
+        is_today = False
+
         try:
             tk = yf.Ticker(sym)
             hist = tk.get_earnings_dates(limit=12)
-            next_date = "TBD"
-            latest_eps = "N/A"
-            surprise_pct = 0.0
-            status = "—"
-            is_today = False
+
             if hist is not None and not hist.empty:
+                # Future dates
                 future = hist[hist.index > now]
                 if not future.empty:
                     next_date = future.index[0].strftime('%Y-%m-%d')
-                    if next_date == now.strftime('%Y-%m-%d'):
+                    if next_date == today_str:
                         is_today = True
+
+                # Latest reported
                 reported = hist.dropna(subset=['Reported EPS'])
                 if not reported.empty:
                     recent = reported.iloc[0]
@@ -193,8 +200,10 @@ def get_earnings_data(ticker_dict: dict):
                     if 'Surprise(%)' in recent:
                         surprise_pct = round(recent['Surprise(%)'], 2)
                         status = "✅ Beat" if surprise_pct > 0 else "❌ Miss" if surprise_pct < 0 else "Met"
-        except:
-            pass  # silent fail → default values
+
+        except Exception:
+            # Silent fail → keep defaults
+            pass
 
         earnings_list.append({
             "Asset": label,
@@ -204,7 +213,7 @@ def get_earnings_data(ticker_dict: dict):
             "Status": status,
             "Today?": "📢 TODAY" if is_today else ""
         })
-    
+
     df = pd.DataFrame(earnings_list)
     return df
 
