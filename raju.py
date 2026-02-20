@@ -145,16 +145,29 @@ tab_overview, tab_sectors, tab_rel_strength, tab_gex, tab_options, tab_earnings,
 ])
 
 # OVERVIEW: Mag 7 & Global
+# OVERVIEW: Mag 7 & Global
 with tab_overview:
     m1, m2, m3, m4 = st.columns(4)
-    for i, sym in enumerate(["SPY", "QQQ", "VIX", "^TNX"]):
-        row = market_df[market_df['Symbol'] == sym].iloc[0]
-        [m1, m2, m3, m4][i].metric(row['Asset'], f"{row['Price']:.2f}", f"{row['Change %']:.2f}%")
+    # Define indices we want to show
+    overview_targets = [("SPY", m1), ("QQQ", m2), ("VIX", m3), ("10Y Yield", m4)]
     
+    for sym_name, col in overview_targets:
+        # Check if the symbol actually exists in our dataframe
+        match = market_df[market_df['Symbol'] == sym_name]
+        
+        if not match.empty:
+            row = match.iloc[0]
+            col.metric(row['Asset'], f"{row['Price']:.2f}", f"{row['Change %']:.2f}%")
+        else:
+            col.metric(sym_name, "N/A", "Data Error")
+
     st.subheader("🚀 Momentum Leaders (Mag 7 + Neo Clouds)")
     combined = market_df[market_df['Asset'].isin(list(MAG7_TICKERS.keys()) + list(NEO_CLOUD_TICKERS.keys()))].copy()
-    st.dataframe(combined.sort_values("Change %", ascending=False).style.background_gradient(cmap='RdYlGn', subset=['Change %', 'RVOL']), hide_index=True, use_container_width=True)
-
+    
+    if not combined.empty:
+        st.dataframe(combined.sort_values("Change %", ascending=False).style.background_gradient(cmap='RdYlGn', subset=['Change %', 'RVOL']), hide_index=True, use_container_width=True)
+    else:
+        st.error("Market data currently unavailable. Refreshing in 5m...")
 # ALPHA SECTORS: The requested IGV + Neo focus
 with tab_sectors:
     col_left, col_right = st.columns(2)
