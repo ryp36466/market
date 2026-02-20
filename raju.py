@@ -67,24 +67,42 @@ def get_earnings_calendar_finnhub(date_str):
         data = r.json()
         filtered = []
         fallback = []
+        
         for item in data.get('earningsCalendar', []):
             symbol = item.get('symbol', '').upper()
+            
+            # 1. Keep raw values for calculation
+            eps_est = item.get('epsEstimate')
+            eps_act = item.get('epsActual')
             rev_est = item.get('revenueEstimate')
             rev_act = item.get('revenueActual')
+
+            # 2. Logic for Beats (Only compare if both are numbers)
+            eps_beat = "—"
+            if eps_act is not None and eps_est is not None:
+                eps_beat = "✅ Beat" if eps_act > eps_est else "❌ Miss" if eps_act < eps_est else "Met"
+                
+            rev_beat = "—"
+            if rev_act is not None and rev_est is not None:
+                rev_beat = "✅ Beat" if rev_act > rev_est else "❌ Miss" if rev_act < rev_est else "Met"
+
+            # 3. Create the entry for the table
             entry = {
                 "When": "",
                 "Symbol": symbol,
                 "Company": symbol,
-                "EPS Est": item.get('epsEstimate'),
-                "EPS Act": item.get('epsActual'),
-                "Rev Est (B)": round(rev_est / 1e9, 2) if rev_est is not None else "—",
-                "Rev Act (B)": round(rev_act / 1e9, 2) if rev_act is not None else "—",
+                "EPS Est": eps_est if eps_est is not None else "—",
+                "EPS Act": eps_act if eps_act is not None else "—",
+                "Rev Est (B)": round(rev_est / 1e9, 2) if rev_est else "—",
+                "Rev Act (B)": round(rev_act / 1e9, 2) if rev_act else "—",
+                "EPS Beat": eps_beat,
+                "Rev Beat": rev_beat
             }
-            entry["EPS Beat"] = "✅ Beat" if (entry["EPS Act"] or 0) > (entry["EPS Est"] or 0) else "❌ Miss" if entry["EPS Act"] is not None and entry["EPS Est"] is not None else "—"
-            entry["Rev Beat"] = "✅ Beat" if (entry["Rev Act (B)"] or 0) > (entry["Rev Est (B)"] or 0) else "❌ Miss" if entry["Rev Act (B)"] is not None and entry["Rev Est (B)"] is not None else "—"
+            
             fallback.append(entry)
             if symbol in HUGE_CAP_SYMBOLS:
                 filtered.append(entry)
+                
         return filtered if filtered else fallback
     except Exception as e:
         st.error(f"Finnhub earnings error: {e}")
