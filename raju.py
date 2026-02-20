@@ -1,11 +1,4 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Alpha Terminal Pro - Updated with Gamma Flip</title>
-    <style>body { font-family: system-ui; }</style>
-</head>
-<body>
-<pre><code>import streamlit as st
+
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -407,6 +400,3 @@ with tab_news:
         st.sidebar.metric("Sentiment Pulse", total_score, delta="Positive" if total_score >= 0 else "Negative")
 
 st_autorefresh(interval=300000, key="global_refresh")
-</code></pre>
-</body>
-</html>
