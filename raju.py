@@ -33,10 +33,131 @@ HUGE_CAP_SYMBOLS = {
     'WMT', 'BABA', 'DE', 'SO', 'NEM', 'BKNG', 'TXRH', 'RIO',
     'AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META', 'TSLA',
     'T', 'VZ', 'XOM', 'CVX', 'JPM', 'BAC', 'WFC', 'PG', 'KO'
-    # Add more mega-caps as needed
+    # Add more as needed
 }
 
-# ========================== CORE HELPERS ==========================
+# ========================== FINNHUB EARNINGS CALENDAR ==========================
+def get_earnings_calendar_finnhub(date_str):
+    # ←←← REPLACE WITH YOUR REAL KEY
+    API_KEY = "YOUR_FINNHUB_API_KEY"   # e.g. "c123abc456def789..."
+
+    url = f"https://finnhub.io/api/v1/calendar/earnings?from={date_str}&to={date_str}&token={API_KEY}"
+    
+    try:
+        r = requests.get(url, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        
+        filtered_rows = []
+        all_rows = []  # fallback if no huge caps
+        
+        for item in data.get('earningsCalendar', []):
+            symbol = item.get('symbol', '').upper()
+            
+            entry = {
+                "When": "",
+                "Symbol": symbol,
+                "Company": item.get('symbol', symbol),  # Finnhub mainly gives symbol; improve with mapping if needed
+                "EPS Est": item.get('epsEstimate'),
+                "EPS Act": item.get('epsActual'),
+                "Rev Est (B)": item.get('revenueEstimate') / 1_000_000_000 if item.get('revenueEstimate') else None,
+                "Rev Act (B)": item.get('revenueActual') / 1_000_000_000 if item.get('revenueActual') else None,
+            }
+            
+            # Beat indicators
+            entry["EPS Beat"] = (
+                "✅ Beat" if (entry["EPS Act"] or 0) > (entry["EPS Est"] or 0)
+                else "❌ Miss" if entry["EPS Act"] is not None and entry["EPS Est"] is not None
+                else "—"
+            )
+            entry["Rev Beat"] = (
+                "✅ Beat" if (entry["Rev Act (B)"] or 0) > (entry["Rev Est (B)"] or 0)
+                else "❌ Miss" if entry["Rev Act (B)"] is not None and entry["Rev Est (B)"] is not None
+                else "—"
+            )
+            
+            all_rows.append(entry)
+            
+            if symbol in HUGE_CAP_SYMBOLS:
+                filtered_rows.append(entry)
+        
+        # Fallback: show all reporters if no huge caps that day
+        return filtered_rows if filtered_rows else all_rows
+    
+    except Exception as e:
+        st.error(f"Finnhub API error for {date_str}: {e}")
+        return []
+
+def get_todays_earnings():
+    est = pytz.timezone('US/Eastern')
+    today = datetime.datetime.now(est).date().strftime('%Y-%m-%d')
+    data = get_earnings_calendar_finnhub(today)
+    for d in data: d["When"] = "Today"
+    return data
+
+def get_yesterdays_earnings():
+    est = pytz.timezone('US/Eastern')
+    yesterday = (datetime.datetime.now(est) - datetime.timedelta(days=1)).date().strftime('%Y-%m-%d')
+    data = get_earnings_calendar_finnhub(yesterday)
+    for d in data: d["When"] = "Yesterday"
+    return data
+
+def get_tomorrows_earnings():
+    est = pytz.timezone('US/Eastern')
+    tomorrow = (datetime.datetime.now(est) + datetime.timedelta(days=1)).date().strftime('%Y-%m-%d')
+    data = get_earnings_calendar_finnhub(tomorrow)
+    for d in data: d["When"] = "Tomorrow"
+    return data
+
+# ========================== MAG7 UPCOMING (yfinance fallback) ==========================
+@st.cache_data(ttl=1800)
+def get_earnings_data(ticker_dict: dict):
+    earnings_list = []
+    est = pytz.timezone('US/Eastern')
+    now = datetime.datetime.now(est)
+    today_str = now.strftime('%Y-%m-%d')
+
+    for label, sym in ticker_dict.items():
+        next_date = "TBD"
+        latest_eps = "N/A"
+        surprise_pct = 0.0
+        status = "—"
+        is_today = False
+
+        try:
+            tk = yf.Ticker(sym)
+            hist = tk.get_earnings_dates(limit=12)
+
+            if hist is not None and not hist.empty:
+                future = hist[hist.index > now]
+                if not future.empty:
+                    next_date = future.index[0].strftime('%Y-%m-%d')
+                    if next_date == today_str:
+                        is_today = True
+
+                reported = hist.dropna(subset=['Reported EPS'])
+                if not reported.empty:
+                    recent = reported.iloc[0]
+                    latest_eps = round(recent['Reported EPS'], 2) if 'Reported EPS' in recent else "N/A"
+                    if 'Surprise(%)' in recent:
+                        surprise_pct = round(recent['Surprise(%)'], 2)
+                        status = "✅ Beat" if surprise_pct > 0 else "❌ Miss" if surprise_pct < 0 else "Met"
+
+        except Exception:
+            pass
+
+        earnings_list.append({
+            "Asset": label,
+            "Next Date": next_date,
+            "Last EPS": latest_eps,
+            "Surprise (%)": surprise_pct,
+            "Status": status,
+            "Today?": "📢 TODAY" if is_today else ""
+        })
+
+    return pd.DataFrame(earnings_list)
+
+# ========================== OTHER HELPERS (unchanged) ==========================
 def get_pcr_data():
     targets = {**MAG7_TICKERS, "SPY": "SPY", "QQQ": "QQQ"}
     results = []
@@ -92,133 +213,6 @@ def fetch_market_snapshot():
             continue
     return pd.DataFrame(rows), intra
 
-# ========================== YOUR IMPROVED EARNINGS FUNCTION ==========================
-def get_earnings_for_date(date_str):
-    # Standardizing headers to mimic a modern browser
-    url = f"https://api.nasdaq.com/api/calendar/earnings?date={date_str}"
-    headers = {
-        "Accept": "application/json, text/plain, */*",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-        "Origin": "https://www.nasdaq.com",
-        "Referer": "https://www.nasdaq.com/"
-    }
-
-    try:
-        r = requests.get(url, headers=headers, timeout=15)
-        r.raise_for_status()
-        data = r.json()
-        
-        all_rows = []
-        filtered_rows = []
-        
-        payload = data.get('data')
-        if payload and payload.get('rows'):
-            for row in payload['rows']:
-                symbol = row.get('symbol', '').upper()
-                
-                # Helper to clean currency strings into floats
-                def to_f(val):
-                    try:
-                        return float(val.replace('$', '').replace(',', '')) if val else None
-                    except:
-                        return None
-
-                # Constructing the standardized data object
-                entry = {
-                    "When": "",
-                    "Symbol": symbol,
-                    "Company": row.get('companyName', symbol),
-                    "EPS Est": to_f(row.get('epsForecast')),
-                    "EPS Act": to_f(row.get('epsActual')),
-                    "Rev Est (B)": to_f(row.get('revenueForecast')) / 1e9 if to_f(row.get('revenueForecast')) else None,
-                    "Rev Act (B)": to_f(row.get('revenueActual')) / 1e9 if to_f(row.get('revenueActual')) else None,
-                }
-
-                # Calculate Beats
-                entry["EPS Beat"] = "✅ Beat" if (entry["EPS Act"] or 0) > (entry["EPS Est"] or 0) else "❌ Miss" if entry["EPS Act"] is not None else "—"
-                entry["Rev Beat"] = "✅ Beat" if (entry["Rev Act (B)"] or 0) > (entry["Rev Est (B)"] or 0) else "❌ Miss" if entry["Rev Act (B)"] is not None else "—"
-
-                all_rows.append(entry)
-                if symbol in HUGE_CAP_SYMBOLS:
-                    filtered_rows.append(entry)
-
-        # FALLBACK: If no Huge Cap stocks found, return all available stocks for that day
-        return filtered_rows if filtered_rows else all_rows
-        
-    except Exception as e:
-        st.error(f"Error fetching data for {date_str}: {e}")
-        return []
-
-def get_todays_earnings():
-    est = pytz.timezone('US/Eastern')
-    today = datetime.datetime.now(est).date().strftime('%Y-%m-%d')
-    data = get_earnings_for_date(today)
-    for d in data: d["When"] = "Today"
-    return data
-
-def get_yesterdays_earnings():
-    est = pytz.timezone('US/Eastern')
-    yesterday = (datetime.datetime.now(est) - datetime.timedelta(days=1)).date().strftime('%Y-%m-%d')
-    data = get_earnings_for_date(yesterday)
-    for d in data: d["When"] = "Yesterday"
-    return data
-
-def get_tomorrows_earnings():
-    est = pytz.timezone('US/Eastern')
-    tomorrow = (datetime.datetime.now(est) + datetime.timedelta(days=1)).date().strftime('%Y-%m-%d')
-    data = get_earnings_for_date(tomorrow)
-    for d in data: d["When"] = "Tomorrow"
-    return data
-
-@st.cache_data(ttl=1800)
-def get_earnings_data(ticker_dict: dict):
-    earnings_list = []
-    est = pytz.timezone('US/Eastern')
-    now = datetime.datetime.now(est)
-    today_str = now.strftime('%Y-%m-%d')
-
-    for label, sym in ticker_dict.items():
-        # Define defaults FIRST — prevents UnboundLocalError
-        next_date = "TBD"
-        latest_eps = "N/A"
-        surprise_pct = 0.0
-        status = "—"
-        is_today = False
-
-        try:
-            tk = yf.Ticker(sym)
-            hist = tk.get_earnings_dates(limit=12)
-
-            if hist is not None and not hist.empty:
-                future = hist[hist.index > now]
-                if not future.empty:
-                    next_date = future.index[0].strftime('%Y-%m-%d')
-                    if next_date == today_str:
-                        is_today = True
-
-                reported = hist.dropna(subset=['Reported EPS'])
-                if not reported.empty:
-                    recent = reported.iloc[0]
-                    latest_eps = round(recent['Reported EPS'], 2) if 'Reported EPS' in recent else "N/A"
-                    if 'Surprise(%)' in recent:
-                        surprise_pct = round(recent['Surprise(%)'], 2)
-                        status = "✅ Beat" if surprise_pct > 0 else "❌ Miss" if surprise_pct < 0 else "Met"
-
-        except Exception:
-            pass  # keep defaults
-
-        earnings_list.append({
-            "Asset": label,
-            "Next Date": next_date,
-            "Last EPS": latest_eps,
-            "Surprise (%)": surprise_pct,
-            "Status": status,
-            "Today?": "📢 TODAY" if is_today else ""
-        })
-
-    return pd.DataFrame(earnings_list)
-
-# ========================== NEWS ==========================
 def get_finviz_news_stable():
     try:
         return News().get_news()['news'].head(15).to_dict('records')
@@ -251,18 +245,92 @@ est = pytz.timezone('US/Eastern')
 time_now = datetime.datetime.now(est).strftime('%H:%M:%S')
 
 st.title("🏛️ Alpha Terminal Pro")
-st.caption(f"EST {time_now} | Earnings: Huge-Cap priority + fallback to all if none")
+st.caption(f"EST {time_now} | Earnings via Finnhub (huge-cap priority + fallback)")
 
 tab_overview, tab_sectors, tab_gex, tab_options, tab_earnings, tab_extremes, tab_news = st.tabs([
     "📈 Market Overview", "🔥 Alpha Sectors", "📊 GEX", "🐳 Options",
     "🎯 Earnings", "🔥 ATH/ATL Plays", "📰 News Wire"
 ])
 
-# Overview, Sectors, GEX, Options tabs remain unchanged — copy from your previous working version if needed
+with tab_overview:
+    st.subheader("🗝️ Key Indices")
+    key_df = market_df[market_df['Asset'].isin(["S&P 500", "SPY", "QQQ"])][['Asset', 'Price', 'Change %', 'RVOL']].round(2)
+    st.dataframe(key_df.style.background_gradient(cmap='RdYlGn', subset=['Change %', 'RVOL']), hide_index=True, use_container_width=True)
+
+    st.subheader("🚀 Magnificent 7")
+    mag7_df = market_df[market_df['Asset'].isin(MAG7_TICKERS.keys())].copy().sort_values('Change %', ascending=False)
+    spy_change = mag7_df[mag7_df['Asset'] == "SPY"]['Change %'].iloc[0] if not mag7_df[mag7_df['Asset'] == "SPY"].empty else 0
+    mag7_df['vs SPY (%)'] = (mag7_df['Change %'] - spy_change).round(2)
+    st.dataframe(mag7_df[['Asset', 'Price', 'Change %', 'vs SPY (%)', 'RVOL']].round(2)
+                 .style.background_gradient(cmap='RdYlGn', subset=['Change %', 'vs SPY (%)', 'RVOL']),
+                 hide_index=True, use_container_width=True)
+
+    st.subheader("📉 Intraday Price Action")
+    cols = st.columns(3)
+    for i, (ticker, name) in enumerate([('SPY','SPY'), ('QQQ','QQQ'), ('^GSPC','S&P 500')]):
+        with cols[i]:
+            if ticker in intra_data['Close'].columns:
+                fig = px.line(intra_data['Close'][ticker].dropna(), title=name)
+                fig.update_layout(template="plotly_dark", height=400)
+                st.plotly_chart(fig, use_container_width=True)
+
+    selected_mag = st.selectbox("MAG7 Intraday Detail", list(MAG7_TICKERS.keys()))
+    sym = MAG7_TICKERS[selected_mag]
+    if sym in intra_data['Close'].columns:
+        fig = px.line(intra_data['Close'][sym].dropna(), title=f"{selected_mag} Intraday")
+        fig.update_layout(template="plotly_dark", height=500)
+        st.plotly_chart(fig, use_container_width=True)
+
+with tab_sectors:
+    sect_data = market_df[market_df['Asset'].isin(SECTOR_TICKERS.keys())].copy()
+    st.dataframe(sect_data[['Asset', 'Price', 'Change %', 'RVOL']]
+                 .style.background_gradient(cmap='RdYlGn', subset=['Change %', 'RVOL']),
+                 hide_index=True, use_container_width=True)
+
+with tab_gex:
+    st.subheader("📊 Gamma Exposure (GEX) Analysis")
+    user_ticker = st.text_input("Enter Ticker for GEX", value="SPY").upper().strip()
+    if user_ticker:
+        try:
+            tk = yf.Ticker(user_ticker)
+            options = tk.options
+            if not options:
+                st.warning("No options chain found.")
+            else:
+                spot = round(tk.history(period="1d")['Close'].iloc[-1], 2)
+                st.write(f"**Current Price:** ${spot}")
+                all_chains = []
+                for exp in options[:3]:
+                    ch = tk.option_chain(exp)
+                    c = ch.calls.assign(type='call', exp=exp)
+                    p = ch.puts.assign(type='put', exp=exp)
+                    all_chains.extend([c, p])
+                df_g = pd.concat(all_chains, ignore_index=True)
+                df_g['dte'] = (pd.to_datetime(df_g['exp']).dt.tz_localize(None) - datetime.datetime.now()).dt.days / 365.0
+                df_g['GEX'] = calc_gamma_vectorized(spot, df_g['strike'].values, df_g['dte'].values,
+                                                    df_g['impliedVolatility'].values, 0.04, 0.01,
+                                                    df_g['type'].values, df_g['openInterest'].values)
+                df_agg = (df_g.groupby('strike')['GEX'].sum() / 1e6).sort_index()
+                df_agg = df_agg[df_agg.abs() > 0.01]
+                fig = go.Figure(go.Bar(x=df_agg.index, y=df_agg.values,
+                                       marker_color=['green' if x > 0 else 'red' for x in df_agg.values]))
+                fig.add_vline(x=spot, line_dash="dash", line_color="white", annotation_text=f"Spot ${spot}")
+                fig.update_layout(template="plotly_dark", title=f"{user_ticker} Net Gamma Exposure", height=600)
+                st.plotly_chart(fig, use_container_width=True)
+        except Exception as e:
+            st.error(f"Error: {str(e)}")
+
+with tab_options:
+    st.subheader("🐳 Put/Call Volume Ratio")
+    pcr_df = get_pcr_data()
+    if not pcr_df.empty:
+        st.dataframe(pcr_df.style.background_gradient(subset=['PCR'], cmap='RdYlGn_r'), hide_index=True, use_container_width=True)
+    else:
+        st.info("Gathering options flow...")
 
 with tab_earnings:
-    st.subheader("🎯 Earnings Calendar – Huge-Cap Priority")
-    st.caption("Shows huge-cap stocks first • If none reporting, shows all for that day • Revenue in $B")
+    st.subheader("🎯 Earnings Calendar – Finnhub Powered")
+    st.caption("Priority: Huge-cap stocks • If none reporting, shows all for that day • Revenue in $B")
 
     today_data    = get_todays_earnings()
     yest_data     = get_yesterdays_earnings()
@@ -291,9 +359,9 @@ with tab_earnings:
 
         st.metric("Reports Shown", f"Today: {len(today_data)} | Yest: {len(yest_data)} | Tom: {len(tomorrow_data)}")
     else:
-        st.info("No earnings data available right now for today/yesterday/tomorrow (API may be down).")
+        st.info("No earnings data fetched (check your Finnhub API key or rate limit).")
 
-    # MAG7 upcoming
+    # MAG7 next catalyst
     mag_next = get_earnings_data(MAG7_TICKERS)
 
     if not mag_next.empty and 'Next Date' in mag_next.columns:
@@ -308,11 +376,11 @@ with tab_earnings:
             next_c = upcoming.iloc[0]
             days = (next_c['Next Date dt'].date() - datetime.datetime.now(est).date()).days
             day_txt = "TODAY" if days == 0 else "tomorrow" if days == 1 else f"in {days} days" if days > 0 else f"{abs(days)} days ago"
-            st.info(f"🚀 **Next MAG7:** {next_c['Asset']} on **{next_c['Next Date']}** ({day_txt})")
+            st.info(f"🚀 **Next MAG7 catalyst:** {next_c['Asset']} on **{next_c['Next Date']}** ({day_txt})")
         else:
             st.info("No upcoming MAG7 earnings dates right now.")
     else:
-        st.info("MAG7 upcoming data unavailable (yfinance issue).")
+        st.info("MAG7 upcoming data unavailable (yfinance fetch issue).")
 
 with tab_extremes:
     st.info("ATH/ATL scanner – coming soon")
