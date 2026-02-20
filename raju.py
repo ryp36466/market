@@ -283,17 +283,17 @@ with tab_rel_strength:
     st.subheader("⚖️ Mag7 Strength vs SPY")
     st.caption("5-Day Cumulative Performance normalized to 0%")
     try:
-        benchmark = "SPY"
+        benchmark = "QQQ"
         mag7_symbols = list(MAG7_TICKERS.values())
         plot_df = hist_data['Close'][[benchmark] + mag7_symbols].dropna()
         normalized_df = (plot_df / plot_df.iloc[0] - 1) * 100
         
         fig = px.line(normalized_df.reset_index().melt(id_vars='Date', var_name='Ticker', value_name='Perf %'),
                       x='Date', y='Perf %', color='Ticker', template="plotly_dark", height=500)
-        fig.update_traces(patch={"line": {"width": 4, "dash": "dot"}}, selector={"legendgroup": "SPY"})
+        fig.update_traces(patch={"line": {"width": 4, "dash": "dot"}}, selector={"legendgroup": "QQQ"})
         st.plotly_chart(fig, use_container_width=True)
         
-        st.write("### Alpha Delta (Current vs SPY)")
+        st.write("### Alpha Delta (Current vs QQQ)")
         current_perf = normalized_df.iloc[-1]
         rel_perf = (current_perf - current_perf[benchmark]).round(2).reset_index()
         rel_perf.columns = ['Ticker', 'vs SPY (%)']
