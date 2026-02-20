@@ -234,10 +234,10 @@ with tab_overview:
 
     st.subheader("🚀 Magnificent 7")
     mag7_df = market_df[market_df['Asset'].isin(MAG7_TICKERS.keys())].copy().sort_values('Change %', ascending=False)
-    qqq_change = mag7_df[mag7_df['Asset'] == "QQQ"]['Change %'].iloc[0] if not mag7_df[mag7_df['Asset'] == "QQQ"].empty else 0
-    mag7_df['vs QQQ (%)'] = (mag7_df['Change %'] - qqq_change).round(2)
+    spy_change = mag7_df[mag7_df['Asset'] == "SPY"]['Change %'].iloc[0] if not mag7_df[mag7_df['Asset'] == "SPY"].empty else 0
+    mag7_df['vs SPY (%)'] = (mag7_df['Change %'] - spy_change).round(2)
     st.dataframe(mag7_df[['Asset', 'Price', 'Change %', 'vs SPY (%)', 'RVOL']].round(2)
-                 .style.background_gradient(cmap='RdYlGn', subset=['Change %', 'vs qqq (%)', 'RVOL']),
+                 .style.background_gradient(cmap='RdYlGn', subset=['Change %', 'vs SPY (%)', 'RVOL']),
                  hide_index=True, use_container_width=True)
 
 with tab_sectors:
@@ -277,10 +277,8 @@ with tab_rel_strength:
                      hide_index=True, use_container_width=True)
     except Exception as e: st.error(f"RS Error: {e}")
 
-    # ────────────────────────────────────────────────
-    #  NEW: MAG7 RELATIVE STRENGTH LINE CHART (added exactly as requested)
-    # ────────────────────────────────────────────────
-    st.subheader("⚖️ Mag7 Strength vs SPY")
+    # ==================== NEW MAG7 vs QQQ CHART ====================
+    st.subheader("⚖️ Mag7 Strength vs QQQ")
     st.caption("5-Day Cumulative Performance normalized to 0%")
     try:
         benchmark = "QQQ"
@@ -296,8 +294,8 @@ with tab_rel_strength:
         st.write("### Alpha Delta (Current vs QQQ)")
         current_perf = normalized_df.iloc[-1]
         rel_perf = (current_perf - current_perf[benchmark]).round(2).reset_index()
-        rel_perf.columns = ['Ticker', 'vs SPY (%)']
-        st.dataframe(rel_perf.sort_values('vs SPY (%)', ascending=False).style.background_gradient(cmap='RdYlGn'),
+        rel_perf.columns = ['Ticker', 'vs QQQ (%)']
+        st.dataframe(rel_perf.sort_values('vs QQQ (%)', ascending=False).style.background_gradient(cmap='RdYlGn'),
                      hide_index=True, use_container_width=True)
     except Exception as e: st.error(f"Mag7 RS Error: {e}")
 
