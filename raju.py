@@ -26,7 +26,7 @@ GLOBAL_TICKERS = {
     "DXY": "DX-Y.NYB", "S&P 500": "^GSPC"
 }
 SECTOR_TICKERS = {
-    "Tech (XLK)": "XLK", "Financials (XLF)": "XLF", "Energy (XLE)": "XLE",
+    "Tech (XLK)": "XLK", "Software (IGV)": "IGV", "Financials (XLF)": "XLF", "Energy (XLE)": "XLE",
     "Healthcare (XLV)": "XLV", "Disc (XLY)": "XLY", "Indus (XLI)": "XLI",
     "Utils (XLU)": "XLU", "RE": "XLRE", "Staples (XLP)": "XLP", "Materials (XLB)": "XLB"
 }
