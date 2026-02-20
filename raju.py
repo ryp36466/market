@@ -1,4 +1,4 @@
-
+import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -18,7 +18,7 @@ from scipy.stats import norm
 st.set_page_config(page_title="Alpha Terminal Pro", page_icon="🏛️", layout="wide")
 
 # ────────────────────────────────────────────────
-#  TICKER CONFIGS (unchanged)
+#  TICKER CONFIGS
 # ────────────────────────────────────────────────
 GLOBAL_TICKERS = {
     "S&P 500 (ES)": "ES=F", "Nasdaq (NQ)": "NQ=F", "Dow (YM)": "YM=F",
@@ -54,6 +54,7 @@ MAG7_TICKERS = {
     "Google": "GOOGL", "Meta": "META", "Tesla": "TSLA"
 }
 
+# Combine all for background fetching
 ALL_TICKERS = {**GLOBAL_TICKERS, **SECTOR_TICKERS, **NEO_CLOUD_TICKERS, **MAG7_TICKERS}
 
 HUGE_CAP_SYMBOLS = {
@@ -73,13 +74,15 @@ TIER1_FIRMS = {
 FINNHUB_API_KEY = "d6au4n9r01qnr27itio0d6au4n9r01qnr27itiog"
 
 # ────────────────────────────────────────────────
-#  DATA HELPERS (unchanged)
+#  DATA HELPERS
 # ────────────────────────────────────────────────
 
 @st.cache_data(ttl=45)
 def fetch_market_snapshot():
     symbols = list(ALL_TICKERS.values())
+    # 5-day Daily for RVOL and Relative Strength
     hist_data = yf.download(symbols, period="5d", interval="1d", progress=False)
+    # Today's Intraday
     intra = yf.download(symbols, period="1d", interval="5m", prepost=True, progress=False)
     
     rows = []
@@ -223,7 +226,55 @@ tab_overview, tab_sectors, tab_rel_strength, tab_gex, tab_options, tab_earnings,
     "🎯 Earnings", "📊 Analyst Changes", "🔥 ATH/ATL Plays", "📰 News Wire"
 ])
 
-# ... (all previous tabs unchanged until tab_gex)
+with tab_overview:
+    st.subheader("🗝️ Key Indices")
+    key_df = market_df[market_df['Asset'].isin(["S&P 500", "SPY", "QQQ"])][['Asset', 'Price', 'Change %', 'RVOL']].round(2)
+    st.dataframe(key_df.style.background_gradient(cmap='RdYlGn', subset=['Change %', 'RVOL']), hide_index=True, use_container_width=True)
+
+    st.subheader("🚀 Magnificent 7")
+    mag7_df = market_df[market_df['Asset'].isin(MAG7_TICKERS.keys())].copy().sort_values('Change %', ascending=False)
+    spy_change = mag7_df[mag7_df['Asset'] == "SPY"]['Change %'].iloc[0] if not mag7_df[mag7_df['Asset'] == "SPY"].empty else 0
+    mag7_df['vs SPY (%)'] = (mag7_df['Change %'] - spy_change).round(2)
+    st.dataframe(mag7_df[['Asset', 'Price', 'Change %', 'vs SPY (%)', 'RVOL']].round(2)
+                 .style.background_gradient(cmap='RdYlGn', subset=['Change %', 'vs SPY (%)', 'RVOL']),
+                 hide_index=True, use_container_width=True)
+
+with tab_sectors:
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.subheader("Major ETFs")
+        sect_data = market_df[market_df['Asset'].isin(SECTOR_TICKERS.keys())].copy()
+        st.dataframe(sect_data[['Asset', 'Price', 'Change %', 'RVOL']]
+                     .style.background_gradient(cmap='RdYlGn', subset=['Change %', 'RVOL']),
+                     hide_index=True, use_container_width=True)
+    with col_b:
+        st.subheader("☁️ Neo Clouds (AI Infrastructure)")
+        neo_data = market_df[market_df['Asset'].isin(NEO_CLOUD_TICKERS.keys())].copy()
+        st.dataframe(neo_data[['Asset', 'Price', 'Change %', 'RVOL']]
+                     .style.background_gradient(cmap='RdYlGn', subset=['Change %', 'RVOL']),
+                     hide_index=True, use_container_width=True)
+
+with tab_rel_strength:
+    st.subheader("⚖️ Sector Strength vs SPY")
+    st.caption("5-Day Cumulative Performance normalized to 0%")
+    try:
+        benchmark = "SPY"
+        sector_symbols = list(SECTOR_TICKERS.values())
+        plot_df = hist_data['Close'][[benchmark] + sector_symbols].dropna()
+        normalized_df = (plot_df / plot_df.iloc[0] - 1) * 100
+        
+        fig = px.line(normalized_df.reset_index().melt(id_vars='Date', var_name='Ticker', value_name='Perf %'),
+                      x='Date', y='Perf %', color='Ticker', template="plotly_dark", height=500)
+        fig.update_traces(patch={"line": {"width": 4, "dash": "dot"}}, selector={"legendgroup": "SPY"})
+        st.plotly_chart(fig, use_container_width=True)
+        
+        st.write("### Alpha Delta (Current vs SPY)")
+        current_perf = normalized_df.iloc[-1]
+        rel_perf = (current_perf - current_perf[benchmark]).round(2).reset_index()
+        rel_perf.columns = ['Ticker', 'vs SPY (%)']
+        st.dataframe(rel_perf.sort_values('vs SPY (%)', ascending=False).style.background_gradient(cmap='RdYlGn'),
+                     hide_index=True, use_container_width=True)
+    except Exception as e: st.error(f"RS Error: {e}")
 
 with tab_gex:
     st.subheader("📊 Gamma Exposure (GEX) + Gamma Flip Level")
@@ -240,7 +291,6 @@ with tab_gex:
             else:
                 spot = round(tk.history(period="1d")['Close'].iloc[-1], 2)
                 
-                # Build full chain (same as before)
                 all_chains = []
                 for exp in options[:3]:
                     ch = tk.option_chain(exp)
@@ -272,7 +322,7 @@ with tab_gex:
                         flip_level = x1 - y1 * (x2 - x1) / (y2 - y1)
                         break
                 
-                # Fallback: highest strike still showing negative GEX (common dealer flip definition)
+                # Fallback: highest strike still showing negative GEX
                 if abs(flip_level - spot) < 0.1 and np.any(gex_vals < 0):
                     flip_level = strikes[gex_vals < 0][-1]
                 
@@ -338,23 +388,6 @@ with tab_gex:
         except Exception as e:
             st.error(f"GEX Error: {e}")
             st.info("Try SPY, QQQ, NVDA, TSLA — most liquid names work best.")
-
-# (All other tabs remain exactly the same as your original code)
-
-with tab_overview:
-    st.subheader("🗝️ Key Indices")
-    key_df = market_df[market_df['Asset'].isin(["S&P 500", "SPY", "QQQ"])][['Asset', 'Price', 'Change %', 'RVOL']].round(2)
-    st.dataframe(key_df.style.background_gradient(cmap='RdYlGn', subset=['Change %', 'RVOL']), hide_index=True, use_container_width=True)
-
-    st.subheader("🚀 Magnificent 7")
-    mag7_df = market_df[market_df['Asset'].isin(MAG7_TICKERS.keys())].copy().sort_values('Change %', ascending=False)
-    spy_change = mag7_df[mag7_df['Asset'] == "SPY"]['Change %'].iloc[0] if not mag7_df[mag7_df['Asset'] == "SPY"].empty else 0
-    mag7_df['vs SPY (%)'] = (mag7_df['Change %'] - spy_change).round(2)
-    st.dataframe(mag7_df[['Asset', 'Price', 'Change %', 'vs SPY (%)', 'RVOL']].round(2)
-                 .style.background_gradient(cmap='RdYlGn', subset=['Change %', 'vs SPY (%)', 'RVOL']),
-                 hide_index=True, use_container_width=True)
-
-# ... (rest of your original tabs unchanged - sectors, relative strength, options PCR, earnings, analyst, extremes, news)
 
 with tab_options:
     st.subheader("🐳 Put/Call Volume Ratio")
