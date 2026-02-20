@@ -43,7 +43,7 @@ HUGE_CAP_SYMBOLS = {
     'T', 'VZ', 'XOM', 'CVX', 'JPM', 'BAC', 'WFC', 'PG', 'KO'
 }
 
-# Tier-1 analyst firms
+# Tier-1 analyst firms (used for filtering upgrade/downgrade)
 TIER1_FIRMS = {
     'Goldman Sachs', 'Morgan Stanley', 'JPMorgan', 'Bank of America', 'Citigroup', 'Barclays',
     'Evercore', 'UBS', 'Jefferies', 'RBC Capital', 'Deutsche Bank', 'Wells Fargo',
@@ -52,73 +52,15 @@ TIER1_FIRMS = {
 }
 
 # ────────────────────────────────────────────────
-#  HELPERS
+#  FINNHUB API KEY (used for both earnings + analyst changes)
 # ────────────────────────────────────────────────
-
-def get_pcr_data():
-    targets = {**MAG7_TICKERS, "SPY": "SPY", "QQQ": "QQQ"}
-    results = []
-    for label, sym in targets.items():
-        try:
-            tk = yf.Ticker(sym)
-            cv = pv = 0
-            opts = tk.options
-            if opts:
-                for exp in opts[:2]:
-                    ch = tk.option_chain(exp)
-                    cv += ch.calls['volume'].sum()
-                    pv += ch.puts['volume'].sum()
-                pcr = pv / cv if cv > 0 else 0
-                results.append({
-                    "Asset": label,
-                    "PCR": round(pcr, 2),
-                    "Sentiment": "🐂 Bull" if pcr < 0.85 else "🐻 Bear" if pcr > 1.15 else "⚖️ Neu"
-                })
-        except:
-            continue
-    return pd.DataFrame(results)
-
-def get_sentiment_score(text):
-    bull = ['upbeat','growth','surge','rally','beat','buy','bullish','expansion','profit','gain','positive','jump']
-    bear = ['slump','drop','fall','miss','sell','bearish','contraction','loss','negative','inflation','fear','risk','sink']
-    score = sum(1 for w in bull if w in text.lower()) - sum(1 for w in bear if w in text.lower())
-    if score > 0: return "🟢 Bullish", score
-    if score < 0: return "🔴 Bearish", score
-    return "⚪ Neutral", 0
-
-def calc_gamma_vectorized(S, K, T, v, r, q, types, OI):
-    T = np.maximum(T, 1/365)
-    v = np.maximum(v, 0.01)
-    d1 = (np.log(S / K) + (r - q + 0.5 * v**2) * T) / (v * np.sqrt(T))
-    gamma = np.exp(-q * T) * norm.pdf(d1) / (S * v * np.sqrt(T))
-    val = (OI * 100) * (S**2) * 0.01 * gamma
-    return np.where(types == 'call', val, -val)
-
-@st.cache_data(ttl=45)
-def fetch_market_snapshot():
-    symbols = list(ALL_TICKERS.values())
-    data = yf.download(symbols, period="5d", interval="1d", progress=False)
-    intra = yf.download(symbols, period="1d", interval="5m", prepost=True, progress=False)
-    rows = []
-    for label, sym in ALL_TICKERS.items():
-        try:
-            price = intra['Close'][sym].dropna().iloc[-1]
-            prev_close = data['Close'][sym].iloc[-2]
-            change = ((price - prev_close) / prev_close) * 100
-            today_vol = intra['Volume'][sym].sum()
-            avg_vol = data['Volume'][sym].iloc[-5:-1].mean()
-            rvol = today_vol / avg_vol if avg_vol > 0 else 1.0
-            rows.append({"Asset": label, "Symbol": sym, "Price": price, "Change %": change, "RVOL": rvol})
-        except:
-            continue
-    return pd.DataFrame(rows), intra
+FINNHUB_API_KEY = "d6au4n9r01qnr27itio0d6au4n9r01qnr27itiog"  # ← your key
 
 # ────────────────────────────────────────────────
-#  EARNINGS – FINNHUB (replace key!)
+#  EARNINGS – FINNHUB (unchanged)
 # ────────────────────────────────────────────────
 def get_earnings_calendar_finnhub(date_str):
-    API_KEY = "d6au4n9r01qnr27itio0d6au4n9r01qnr27itiog"  # ←←← PUT YOUR REAL KEY HERE
-    url = f"https://finnhub.io/api/v1/calendar/earnings?from={date_str}&to={date_str}&token={API_KEY}"
+    url = f"https://finnhub.io/api/v1/calendar/earnings?from={date_str}&to={date_str}&token={FINNHUB_API_KEY}"
     try:
         r = requests.get(url, timeout=10)
         r.raise_for_status()
@@ -165,81 +107,126 @@ def get_tomorrows_earnings():
     return data
 
 # ────────────────────────────────────────────────
-#  TIER 1 ANALYST CHANGES – LAST 3 DAYS
+#  ANALYST UPGRADES / DOWNGRADES – FINNHUB
 # ────────────────────────────────────────────────
-@st.cache_data(ttl=900)  # 15 min
-def get_tier1_analyst_changes(days_back=3):
-    start_date = datetime.date.today() - datetime.timedelta(days=days_back)
+@st.cache_data(ttl=900)  # 15 min cache
+def get_analyst_upgrades_downgrades_finnhub(days_back=5):
+    end_date = datetime.date.today()
+    start_date = end_date - datetime.timedelta(days=days_back)
+    from_str = start_date.strftime('%Y-%m-%d')
+    to_str   = end_date.strftime('%Y-%m-%d')
 
-    urls = [
-        "https://www.marketbeat.com/ratings/upgrades/",
-        "https://www.marketbeat.com/ratings/downgrades/"
-    ]
+    url = f"https://finnhub.io/api/v1/stock/upgrade-downgrade?from={from_str}&to={to_str}&token={FINNHUB_API_KEY}"
 
-    changes = []
+    try:
+        r = requests.get(url, timeout=12)
+        r.raise_for_status()
+        data = r.json()
 
-    for url in urls:
-        try:
-            headers = {"User-Agent": "Mozilla/5.0"}
-            r = requests.get(url, headers=headers, timeout=12)
-            soup = BeautifulSoup(r.text, 'html.parser')
+        changes = []
 
-            table = soup.find('table')
-            if not table:
+        for item in data:
+            symbol = item.get('symbol', '').upper()
+            firm   = item.get('gradeCompany', '').strip()
+            if firm not in TIER1_FIRMS:
                 continue
 
-            rows = table.find_all('tr')[1:40]  # recent items
+            # Skip if not upgrade or downgrade
+            grade_from = item.get('fromGrade', '')
+            grade_to   = item.get('toGrade', '')
+            action = "Upgrade" if "up" in grade_to.lower() or grade_to < grade_from else \
+                     "Downgrade" if "down" in grade_to.lower() or grade_to > grade_from else "Change"
 
-            for row in rows:
-                cols = row.find_all('td')
-                if len(cols) < 6:
+            if action == "Change":
+                continue  # optional: only show clear upgrades/downgrades
+
+            try:
+                tk = yf.Ticker(symbol)
+                mcap = tk.info.get('marketCap', 0) / 1_000_000_000
+                if mcap < 1:
                     continue
+            except:
+                continue
 
-                date_str = cols[0].get_text(strip=True)
-                try:
-                    dt = datetime.datetime.strptime(date_str.split()[0], '%m/%d/%Y').date()
-                    if dt < start_date:
-                        continue
-                except:
-                    continue
+            changes.append({
+                "Date": item.get('gradeTime', '')[:10],  # YYYY-MM-DD
+                "Symbol": symbol,
+                "Company": item.get('companyName', symbol),
+                "Firm": firm,
+                "From": grade_from,
+                "To": grade_to,
+                "Action": action,
+                "Market Cap (B)": round(mcap, 1) if mcap else "—"
+            })
 
-                ticker = cols[1].get_text(strip=True)
-                company = cols[2].get_text(strip=True)
-                firm = cols[3].get_text(strip=True)
-                action = cols[4].get_text(strip=True)
-                rating = cols[5].get_text(strip=True)
+        df = pd.DataFrame(changes)
+        if not df.empty:
+            df = df.sort_values("Date", ascending=False).reset_index(drop=True)
+        return df
 
-                if firm not in TIER1_FIRMS:
-                    continue
+    except Exception as e:
+        st.error(f"Finnhub analyst changes error: {e}")
+        return pd.DataFrame()
 
-                try:
-                    tk = yf.Ticker(ticker)
-                    mcap = tk.info.get('marketCap', 0) / 1_000_000_000
-                    if mcap < 1:
-                        continue
-                except:
-                    continue
+# ────────────────────────────────────────────────
+#  OTHER HELPERS (PCR, sentiment, gamma, market snapshot, news)
+# ────────────────────────────────────────────────
 
-                changes.append({
-                    "Date": date_str,
-                    "Symbol": ticker,
-                    "Company": company,
-                    "Firm": firm,
-                    "Action": action,
-                    "Rating Change": rating,
-                    "Market Cap (B)": round(mcap, 1) if mcap else "—"
-                })
+def get_pcr_data():
+    targets = {**MAG7_TICKERS, "SPY": "SPY", "QQQ": "QQQ"}
+    results = []
+    for label, sym in targets.items():
+        try:
+            tk = yf.Ticker(sym)
+            cv = pv = 0
+            opts = tk.options
+            if opts:
+                for exp in opts[:2]:
+                    ch = tk.option_chain(exp)
+                    cv += ch.calls['volume'].sum()
+                    pv += ch.puts['volume'].sum()
+                pcr = pv / cv if cv > 0 else 0
+                results.append({"Asset": label, "PCR": round(pcr, 2),
+                                "Sentiment": "🐂 Bull" if pcr < 0.85 else "🐻 Bear" if pcr > 1.15 else "⚖️ Neu"})
         except:
             continue
+    return pd.DataFrame(results)
 
-    df = pd.DataFrame(changes)
-    if not df.empty:
-        df = df.sort_values("Date", ascending=False).reset_index(drop=True)
-    return df
+def get_sentiment_score(text):
+    bull = ['upbeat','growth','surge','rally','beat','buy','bullish','expansion','profit','gain','positive','jump']
+    bear = ['slump','drop','fall','miss','sell','bearish','contraction','loss','negative','inflation','fear','risk','sink']
+    score = sum(1 for w in bull if w in text.lower()) - sum(1 for w in bear if w in text.lower())
+    if score > 0: return "🟢 Bullish", score
+    if score < 0: return "🔴 Bearish", score
+    return "⚪ Neutral", 0
 
-# ────────────────────────────────────────────────
-#  NEWS – FINVIZ
-# ────────────────────────────────────────────────
+def calc_gamma_vectorized(S, K, T, v, r, q, types, OI):
+    T = np.maximum(T, 1/365)
+    v = np.maximum(v, 0.01)
+    d1 = (np.log(S / K) + (r - q + 0.5 * v**2) * T) / (v * np.sqrt(T))
+    gamma = np.exp(-q * T) * norm.pdf(d1) / (S * v * np.sqrt(T))
+    val = (OI * 100) * (S**2) * 0.01 * gamma
+    return np.where(types == 'call', val, -val)
+
+@st.cache_data(ttl=45)
+def fetch_market_snapshot():
+    symbols = list(ALL_TICKERS.values())
+    data = yf.download(symbols, period="5d", interval="1d", progress=False)
+    intra = yf.download(symbols, period="1d", interval="5m", prepost=True, progress=False)
+    rows = []
+    for label, sym in ALL_TICKERS.items():
+        try:
+            price = intra['Close'][sym].dropna().iloc[-1]
+            prev_close = data['Close'][sym].iloc[-2]
+            change = ((price - prev_close) / prev_close) * 100
+            today_vol = intra['Volume'][sym].sum()
+            avg_vol = data['Volume'][sym].iloc[-5:-1].mean()
+            rvol = today_vol / avg_vol if avg_vol > 0 else 1.0
+            rows.append({"Asset": label, "Symbol": sym, "Price": price, "Change %": change, "RVOL": rvol})
+        except:
+            continue
+    return pd.DataFrame(rows), intra
+
 def get_finviz_news_stable():
     try:
         return News().get_news()['news'].head(15).to_dict('records')
@@ -276,7 +263,7 @@ est = pytz.timezone('US/Eastern')
 time_now = datetime.datetime.now(est).strftime('%H:%M:%S')
 
 st.title("🏛️ Alpha Terminal Pro")
-st.caption(f"EST {time_now} | Data as of {datetime.date.today()}")
+st.caption(f"EST {time_now} | Earnings & Analyst Changes via Finnhub")
 
 tab_overview, tab_sectors, tab_gex, tab_options, tab_earnings, tab_analyst, tab_extremes, tab_news = st.tabs([
     "📈 Market Overview", "🔥 Alpha Sectors", "📊 GEX", "🐳 Options",
@@ -374,11 +361,11 @@ with tab_earnings:
         st.info("No earnings data fetched (check Finnhub API key).")
 
 with tab_analyst:
-    st.subheader("📊 Tier 1 Analyst Upgrades / Downgrades – Last 3 Days")
-    st.caption("Tier-1 firms only • Stocks with market cap > $1 billion • Sourced from MarketBeat")
+    st.subheader("📊 Tier 1 Analyst Upgrades / Downgrades – Last ~5 Days")
+    st.caption("Tier-1 firms only • Market cap > $1B • Real-time via Finnhub API")
 
-    with st.spinner("Loading recent analyst actions..."):
-        analyst_df = get_tier1_analyst_changes(days_back=5)
+    with st.spinner("Fetching analyst changes..."):
+        analyst_df = get_analyst_upgrades_downgrades_finnhub(days_back=5)
 
     if not analyst_df.empty:
         def highlight_action(val):
@@ -395,7 +382,7 @@ with tab_analyst:
 
         st.success(f"Found {len(analyst_df)} qualifying changes")
     else:
-        st.info("No recent Tier-1 analyst changes found for billion-dollar+ stocks (or data fetch issue).")
+        st.info("No recent Tier-1 analyst changes found (or API error). Check key/rate limits.")
 
 with tab_extremes:
     st.info("ATH/ATL scanner – coming soon")
