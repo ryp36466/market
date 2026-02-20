@@ -39,7 +39,7 @@ HUGE_CAP_SYMBOLS = {
 # ========================== FINNHUB EARNINGS CALENDAR ==========================
 def get_earnings_calendar_finnhub(date_str):
     # ←←← REPLACE WITH YOUR REAL KEY
-    API_KEY = "YOUR_FINNHUB_API_KEY"   # e.g. "c123abc456def789..."
+    API_KEY = "d6au4n9r01qnr27itio0d6au4n9r01qnr27itiog"   # e.g. "c123abc456def789..."
 
     url = f"https://finnhub.io/api/v1/calendar/earnings?from={date_str}&to={date_str}&token={API_KEY}"
     
