@@ -43,7 +43,7 @@ HUGE_CAP_SYMBOLS = {
     'T', 'VZ', 'XOM', 'CVX', 'JPM', 'BAC', 'WFC', 'PG', 'KO'
 }
 
-# Tier-1 analyst firms (used for filtering upgrade/downgrade)
+# Tier-1 analyst firms (used to filter upgrade/downgrade data)
 TIER1_FIRMS = {
     'Goldman Sachs', 'Morgan Stanley', 'JPMorgan', 'Bank of America', 'Citigroup', 'Barclays',
     'Evercore', 'UBS', 'Jefferies', 'RBC Capital', 'Deutsche Bank', 'Wells Fargo',
@@ -52,12 +52,12 @@ TIER1_FIRMS = {
 }
 
 # ────────────────────────────────────────────────
-#  FINNHUB API KEY (used for both earnings + analyst changes)
+#  FINNHUB API KEY (shared for earnings + analyst upgrades/downgrades)
 # ────────────────────────────────────────────────
 FINNHUB_API_KEY = "d6au4n9r01qnr27itio0d6au4n9r01qnr27itiog"  # ← your key
 
 # ────────────────────────────────────────────────
-#  EARNINGS – FINNHUB (unchanged)
+#  EARNINGS – FINNHUB
 # ────────────────────────────────────────────────
 def get_earnings_calendar_finnhub(date_str):
     url = f"https://finnhub.io/api/v1/calendar/earnings?from={date_str}&to={date_str}&token={FINNHUB_API_KEY}"
@@ -109,44 +109,71 @@ def get_tomorrows_earnings():
 # ────────────────────────────────────────────────
 #  ANALYST UPGRADES / DOWNGRADES – FINNHUB
 # ────────────────────────────────────────────────
+@st.cache_data(ttl=900)  # 15 min cache
+def get_analyst_changes_finnhub(days_back=5):
+    end_date = datetime.date.today()
+    start_date = end_date - datetime.timedelta(days=days_back)
+    from_str = start_date.strftime('%Y-%m-%d')
+    to_str   = end_date.strftime('%Y-%m-%d')
 
+    url = f"https://finnhub.io/api/v1/stock/upgrade-downgrade?from={from_str}&to={to_str}&token={FINNHUB_API_KEY}"
 
-
-# 1. Get a free key at https://www.alphavantage.co/support/#api-key
-ALPHA_VANTAGE_KEY = " I5FJOLRF7Z2DO1HB"
-
-@st.cache_data(ttl=3600)
-def get_reliable_earnings():
-    # This endpoint is specifically designed for developers, not scraped
-    url = f'https://www.alphavantage.co/query?function=EARNINGS_CALENDAR&horizon=3month&apikey={ALPHA_VANTAGE_KEY}'
-    
     try:
-        with requests.Session() as s:
-            download = s.get(url)
-            decoded_content = download.content.decode('utf-8')
-            
-            # Alpha Vantage returns a CSV for this specific endpoint
-            import csv
-            cr = csv.reader(decoded_content.splitlines(), delimiter=',')
-            my_list = list(cr)
-            df = pd.DataFrame(my_list[1:], columns=my_list[0])
-            
-            # Filter for your specific "Huge Cap" list if desired
-            # df = df[df['symbol'].isin(HUGE_CAP_SYMBOLS)]
-            
-            return df
+        r = requests.get(url, timeout=12)
+        r.raise_for_status()
+        data = r.json()
+
+        changes = []
+
+        for item in data:
+            symbol = item.get('symbol', '').upper()
+            firm   = item.get('gradeCompany', '').strip()
+
+            # Only keep Tier-1 firms
+            if firm not in TIER1_FIRMS:
+                continue
+
+            grade_from = item.get('fromGrade', '').strip()
+            grade_to   = item.get('toGrade', '').strip()
+
+            # Determine action type
+            if grade_to.lower() in ['buy', 'outperform', 'overweight'] and grade_from.lower() not in ['buy', 'outperform', 'overweight']:
+                action = "Upgrade"
+            elif grade_to.lower() in ['sell', 'underperform', 'underweight'] and grade_from.lower() not in ['sell', 'underperform', 'underweight']:
+                action = "Downgrade"
+            else:
+                action = "Rating Change"
+
+            try:
+                tk = yf.Ticker(symbol)
+                mcap = tk.info.get('marketCap', 0) / 1_000_000_000
+                if mcap < 1:
+                    continue
+            except:
+                continue
+
+            changes.append({
+                "Date": item.get('gradeTime', 'N/A')[:10],
+                "Symbol": symbol,
+                "Company": item.get('companyName', symbol),
+                "Firm": firm,
+                "From": grade_from or "—",
+                "To": grade_to or "—",
+                "Action": action,
+                "Market Cap (B)": round(mcap, 1) if mcap else "—"
+            })
+
+        df = pd.DataFrame(changes)
+        if not df.empty:
+            df = df.sort_values("Date", ascending=False).reset_index(drop=True)
+        return df
+
     except Exception as e:
-        st.error(f"API Error: {e}")
+        st.error(f"Finnhub analyst changes error: {e}")
         return pd.DataFrame()
 
-# Use it in your tab
-data = get_reliable_earnings()
-if not data.empty:
-    st.dataframe(data)
-else:
-    st.warning("Still no data. Check your API key or logs.")
 # ────────────────────────────────────────────────
-#  OTHER HELPERS (PCR, sentiment, gamma, market snapshot, news)
+#  OTHER HELPERS
 # ────────────────────────────────────────────────
 
 def get_pcr_data():
@@ -335,14 +362,14 @@ with tab_earnings:
 
         st.metric("Reports Shown", f"Today: {len(today_data)} | Yest: {len(yest_data)} | Tom: {len(tomorrow_data)}")
     else:
-        st.info("No earnings data fetched (check Finnhub API key).")
+        st.info("No earnings data fetched (check Finnhub API key or rate limit).")
 
 with tab_analyst:
     st.subheader("📊 Tier 1 Analyst Upgrades / Downgrades – Last ~5 Days")
-    st.caption("Tier-1 firms only • Market cap > $1B • Real-time via Finnhub API")
+    st.caption("Only Tier-1 firms • Market cap > $1 billion • Data from Finnhub API")
 
-    with st.spinner("Fetching analyst changes..."):
-        analyst_df = get_analyst_upgrades_downgrades_finnhub(days_back=5)
+    with st.spinner("Fetching analyst grade changes..."):
+        analyst_df = get_analyst_changes_finnhub(days_back=5)
 
     if not analyst_df.empty:
         def highlight_action(val):
@@ -359,7 +386,7 @@ with tab_analyst:
 
         st.success(f"Found {len(analyst_df)} qualifying changes")
     else:
-        st.info("No recent Tier-1 analyst changes found (or API error). Check key/rate limits.")
+        st.info("No recent Tier-1 analyst grade changes found (or API/rate-limit issue).")
 
 with tab_extremes:
     st.info("ATH/ATL scanner – coming soon")
@@ -382,4 +409,4 @@ with tab_news:
     else:
         st.error("News feed currently unavailable.")
 
-st_autorefresh(interval=300000, key="global_refresh")  # 5 min
+st_autorefresh(interval=300000, key="global_refresh")  # 5 minutes
