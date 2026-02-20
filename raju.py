@@ -234,10 +234,10 @@ with tab_overview:
 
     st.subheader("🚀 Magnificent 7")
     mag7_df = market_df[market_df['Asset'].isin(MAG7_TICKERS.keys())].copy().sort_values('Change %', ascending=False)
-    spy_change = mag7_df[mag7_df['Asset'] == "SPY"]['Change %'].iloc[0] if not mag7_df[mag7_df['Asset'] == "SPY"].empty else 0
-    mag7_df['vs SPY (%)'] = (mag7_df['Change %'] - spy_change).round(2)
+    qqq_change = mag7_df[mag7_df['Asset'] == "QQQ"]['Change %'].iloc[0] if not mag7_df[mag7_df['Asset'] == "QQQ"].empty else 0
+    mag7_df['vs QQQ (%)'] = (mag7_df['Change %'] - qqq_change).round(2)
     st.dataframe(mag7_df[['Asset', 'Price', 'Change %', 'vs SPY (%)', 'RVOL']].round(2)
-                 .style.background_gradient(cmap='RdYlGn', subset=['Change %', 'vs SPY (%)', 'RVOL']),
+                 .style.background_gradient(cmap='RdYlGn', subset=['Change %', 'vs qqq (%)', 'RVOL']),
                  hide_index=True, use_container_width=True)
 
 with tab_sectors:
