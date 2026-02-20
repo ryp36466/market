@@ -277,6 +277,30 @@ with tab_rel_strength:
                      hide_index=True, use_container_width=True)
     except Exception as e: st.error(f"RS Error: {e}")
 
+    # ────────────────────────────────────────────────
+    #  NEW: MAG7 RELATIVE STRENGTH LINE CHART (added exactly as requested)
+    # ────────────────────────────────────────────────
+    st.subheader("⚖️ Mag7 Strength vs SPY")
+    st.caption("5-Day Cumulative Performance normalized to 0%")
+    try:
+        benchmark = "SPY"
+        mag7_symbols = list(MAG7_TICKERS.values())
+        plot_df = hist_data['Close'][[benchmark] + mag7_symbols].dropna()
+        normalized_df = (plot_df / plot_df.iloc[0] - 1) * 100
+        
+        fig = px.line(normalized_df.reset_index().melt(id_vars='Date', var_name='Ticker', value_name='Perf %'),
+                      x='Date', y='Perf %', color='Ticker', template="plotly_dark", height=500)
+        fig.update_traces(patch={"line": {"width": 4, "dash": "dot"}}, selector={"legendgroup": "SPY"})
+        st.plotly_chart(fig, use_container_width=True)
+        
+        st.write("### Alpha Delta (Current vs SPY)")
+        current_perf = normalized_df.iloc[-1]
+        rel_perf = (current_perf - current_perf[benchmark]).round(2).reset_index()
+        rel_perf.columns = ['Ticker', 'vs SPY (%)']
+        st.dataframe(rel_perf.sort_values('vs SPY (%)', ascending=False).style.background_gradient(cmap='RdYlGn'),
+                     hide_index=True, use_container_width=True)
+    except Exception as e: st.error(f"Mag7 RS Error: {e}")
+
 with tab_gex:
     st.subheader("📊 Gamma Exposure (GEX) + Gamma Flip Level")
     st.caption("Front 3 expirations • Green = Long Gamma (stabilizing) • Red = Short Gamma (amplifying) • Yellow line = **Gamma Flip**")
