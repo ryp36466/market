@@ -12,37 +12,49 @@ import plotly.express as px
 import plotly.graph_objects as go
 from scipy.stats import norm
 
-# ========================== PAGE CONFIG ==========================
+# ────────────────────────────────────────────────
+#  PAGE CONFIG
+# ────────────────────────────────────────────────
 st.set_page_config(page_title="Alpha Terminal Pro", page_icon="🏛️", layout="wide")
 
-# ========================== TICKER CONFIGS ==========================
+# ────────────────────────────────────────────────
+#  TICKER CONFIGS
+# ────────────────────────────────────────────────
 GLOBAL_TICKERS = {
     "S&P 500 (ES)": "ES=F", "Nasdaq (NQ)": "NQ=F", "Dow (YM)": "YM=F",
     "SPY": "SPY", "QQQ": "QQQ", "VIX": "^VIX", "10Y Yield": "^TNX",
     "DXY": "DX-Y.NYB", "S&P 500": "^GSPC"
 }
-SECTOR_TICKERS = {"Tech (XLK)": "XLK", "Financials (XLF)": "XLF", "Energy (XLE)": "XLE",
-                  "Healthcare (XLV)": "XLV", "Disc (XLY)": "XLY", "Indus (XLI)": "XLI",
-                  "Utils (XLU)": "XLU", "RE": "XLRE", "Staples (XLP)": "XLP", "Materials (XLB)": "XLB"}
-MAG7_TICKERS = {"Apple": "AAPL", "MSFT": "MSFT", "Nvidia": "NVDA", "Amazon": "AMZN",
-                "Google": "GOOGL", "Meta": "META", "Tesla": "TSLA"}
+SECTOR_TICKERS = {
+    "Tech (XLK)": "XLK", "Financials (XLF)": "XLF", "Energy (XLE)": "XLE",
+    "Healthcare (XLV)": "XLV", "Disc (XLY)": "XLY", "Indus (XLI)": "XLI",
+    "Utils (XLU)": "XLU", "RE": "XLRE", "Staples (XLP)": "XLP", "Materials (XLB)": "XLB"
+}
+MAG7_TICKERS = {
+    "Apple": "AAPL", "MSFT": "MSFT", "Nvidia": "NVDA", "Amazon": "AMZN",
+    "Google": "GOOGL", "Meta": "META", "Tesla": "TSLA"
+}
 ALL_TICKERS = {**GLOBAL_TICKERS, **SECTOR_TICKERS, **MAG7_TICKERS}
 
-# Huge / large-cap filter for earnings
+# Huge-cap filter for earnings
 HUGE_CAP_SYMBOLS = {
     'WMT', 'BABA', 'DE', 'SO', 'NEM', 'BKNG', 'TXRH', 'RIO',
     'AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META', 'TSLA',
     'T', 'VZ', 'XOM', 'CVX', 'JPM', 'BAC', 'WFC', 'PG', 'KO'
 }
 
-# Tier-1 analyst firms for the new tab
+# Tier-1 analyst firms
 TIER1_FIRMS = {
     'Goldman Sachs', 'Morgan Stanley', 'JPMorgan', 'Bank of America', 'Citigroup', 'Barclays',
-    'Evercore', 'UBS', 'Jefferies', 'RBC Capital', 'Deutsche Bank', 'Wells Fargo', 'Credit Suisse',
-    'Bernstein', 'BofA Securities', 'Piper Sandler', 'Oppenheimer', 'Wedbush', 'Stifel'
+    'Evercore', 'UBS', 'Jefferies', 'RBC Capital', 'Deutsche Bank', 'Wells Fargo',
+    'BofA Securities', 'Credit Suisse', 'Bernstein', 'Piper Sandler', 'Oppenheimer',
+    'Wedbush', 'Stifel', 'Wolfe Research'
 }
 
-# ========================== CORE HELPERS ==========================
+# ────────────────────────────────────────────────
+#  HELPERS
+# ────────────────────────────────────────────────
+
 def get_pcr_data():
     targets = {**MAG7_TICKERS, "SPY": "SPY", "QQQ": "QQQ"}
     results = []
@@ -57,8 +69,11 @@ def get_pcr_data():
                     cv += ch.calls['volume'].sum()
                     pv += ch.puts['volume'].sum()
                 pcr = pv / cv if cv > 0 else 0
-                results.append({"Asset": label, "PCR": round(pcr, 2),
-                                "Sentiment": "🐂 Bull" if pcr < 0.85 else "🐻 Bear" if pcr > 1.15 else "⚖️ Neu"})
+                results.append({
+                    "Asset": label,
+                    "PCR": round(pcr, 2),
+                    "Sentiment": "🐂 Bull" if pcr < 0.85 else "🐻 Bear" if pcr > 1.15 else "⚖️ Neu"
+                })
         except:
             continue
     return pd.DataFrame(results)
@@ -98,16 +113,18 @@ def fetch_market_snapshot():
             continue
     return pd.DataFrame(rows), intra
 
-# ========================== FINNHUB EARNINGS (placeholder – replace key) ==========================
+# ────────────────────────────────────────────────
+#  EARNINGS – FINNHUB (replace key!)
+# ────────────────────────────────────────────────
 def get_earnings_calendar_finnhub(date_str):
-    API_KEY = "d6au4n9r01qnr27itio0d6au4n9r01qnr27itiog"  # ← Replace with real key
+    API_KEY = "d6au4n9r01qnr27itio0d6au4n9r01qnr27itiog"  # ←←← PUT YOUR REAL KEY HERE
     url = f"https://finnhub.io/api/v1/calendar/earnings?from={date_str}&to={date_str}&token={API_KEY}"
     try:
         r = requests.get(url, timeout=10)
         r.raise_for_status()
         data = r.json()
         filtered = []
-        all_rows = []
+        fallback = []
         for item in data.get('earningsCalendar', []):
             symbol = item.get('symbol', '').upper()
             entry = {
@@ -121,12 +138,12 @@ def get_earnings_calendar_finnhub(date_str):
             }
             entry["EPS Beat"] = "✅ Beat" if (entry["EPS Act"] or 0) > (entry["EPS Est"] or 0) else "❌ Miss" if entry["EPS Act"] is not None else "—"
             entry["Rev Beat"] = "✅ Beat" if (entry["Rev Act (B)"] or 0) > (entry["Rev Est (B)"] or 0) else "❌ Miss" if entry["Rev Act (B)"] is not None else "—"
-            all_rows.append(entry)
+            fallback.append(entry)
             if symbol in HUGE_CAP_SYMBOLS:
                 filtered.append(entry)
-        return filtered if filtered else all_rows
+        return filtered if filtered else fallback
     except Exception as e:
-        st.error(f"Finnhub error: {e}")
+        st.error(f"Finnhub earnings error: {e}")
         return []
 
 def get_todays_earnings():
@@ -136,66 +153,65 @@ def get_todays_earnings():
     return data
 
 def get_yesterdays_earnings():
-    yesterday = (datetime.datetime.now(pytz.timezone('US/Eastern')) - datetime.timedelta(days=1)).date().strftime('%Y-%m-%d')
-    data = get_earnings_calendar_finnhub(yesterday)
+    yest = (datetime.datetime.now(pytz.timezone('US/Eastern')) - datetime.timedelta(days=1)).date().strftime('%Y-%m-%d')
+    data = get_earnings_calendar_finnhub(yest)
     for d in data: d["When"] = "Yesterday"
     return data
 
 def get_tomorrows_earnings():
-    tomorrow = (datetime.datetime.now(pytz.timezone('US/Eastern')) + datetime.timedelta(days=1)).date().strftime('%Y-%m-%d')
-    data = get_earnings_calendar_finnhub(tomorrow)
+    tom = (datetime.datetime.now(pytz.timezone('US/Eastern')) + datetime.timedelta(days=1)).date().strftime('%Y-%m-%d')
+    data = get_earnings_calendar_finnhub(tom)
     for d in data: d["When"] = "Tomorrow"
     return data
 
-# ========================== NEW: TIER 1 ANALYST CHANGES (LAST 3 DAYS) ==========================
-@st.cache_data(ttl=900)  # 15 minutes
+# ────────────────────────────────────────────────
+#  TIER 1 ANALYST CHANGES – LAST 3 DAYS
+# ────────────────────────────────────────────────
+@st.cache_data(ttl=900)  # 15 min
 def get_tier1_analyst_changes(days_back=3):
     start_date = datetime.date.today() - datetime.timedelta(days=days_back)
-    
-    # MarketBeat recent upgrades & downgrades pages
+
     urls = [
         "https://www.marketbeat.com/ratings/upgrades/",
         "https://www.marketbeat.com/ratings/downgrades/"
     ]
-    
+
     changes = []
-    
+
     for url in urls:
         try:
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+            headers = {"User-Agent": "Mozilla/5.0"}
             r = requests.get(url, headers=headers, timeout=12)
             soup = BeautifulSoup(r.text, 'html.parser')
-            
-            table = soup.find('table', {'class': 'table'})
+
+            table = soup.find('table')
             if not table:
                 continue
-                
-            rows = table.find_all('tr')[1:30]  # recent ones only
-            
+
+            rows = table.find_all('tr')[1:40]  # recent items
+
             for row in rows:
                 cols = row.find_all('td')
                 if len(cols) < 6:
                     continue
-                    
+
                 date_str = cols[0].get_text(strip=True)
                 try:
-                    change_date = datetime.datetime.strptime(date_str.split()[0], '%m/%d/%Y').date()
-                    if change_date < start_date:
+                    dt = datetime.datetime.strptime(date_str.split()[0], '%m/%d/%Y').date()
+                    if dt < start_date:
                         continue
                 except:
                     continue
-                
-                ticker_link = cols[1].find('a')
-                ticker = ticker_link.get_text(strip=True) if ticker_link else cols[1].get_text(strip=True)
-                
+
+                ticker = cols[1].get_text(strip=True)
                 company = cols[2].get_text(strip=True)
                 firm = cols[3].get_text(strip=True)
                 action = cols[4].get_text(strip=True)
-                rating_change = cols[5].get_text(strip=True)
-                
+                rating = cols[5].get_text(strip=True)
+
                 if firm not in TIER1_FIRMS:
                     continue
-                
+
                 try:
                     tk = yf.Ticker(ticker)
                     mcap = tk.info.get('marketCap', 0) / 1_000_000_000
@@ -203,27 +219,58 @@ def get_tier1_analyst_changes(days_back=3):
                         continue
                 except:
                     continue
-                
+
                 changes.append({
                     "Date": date_str,
                     "Symbol": ticker,
                     "Company": company,
                     "Firm": firm,
                     "Action": action,
-                    "Rating Change": rating_change,
+                    "Rating Change": rating,
                     "Market Cap (B)": round(mcap, 1) if mcap else "—"
                 })
-                
-        except Exception as e:
-            st.warning(f"Analyst changes fetch issue: {e}")
+        except:
             continue
-    
+
     df = pd.DataFrame(changes)
     if not df.empty:
         df = df.sort_values("Date", ascending=False).reset_index(drop=True)
     return df
 
-# ========================== MAIN UI ==========================
+# ────────────────────────────────────────────────
+#  NEWS – FINVIZ
+# ────────────────────────────────────────────────
+def get_finviz_news_stable():
+    try:
+        return News().get_news()['news'].head(15).to_dict('records')
+    except:
+        try:
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+            r = requests.get("https://finviz.com/news.ashx", headers=headers, timeout=10)
+            soup = BeautifulSoup(r.text, "html.parser")
+            table = soup.find("table", id="news-table")
+            if not table:
+                return []
+            news_list = []
+            for row in table.find_all("tr")[:15]:
+                cells = row.find_all("td")
+                if len(cells) != 2:
+                    continue
+                a = cells[1].find("a", class_="tab-link-news")
+                if a:
+                    news_list.append({
+                        "Title": a.text.strip(),
+                        "URL": a["href"],
+                        "Source": cells[1].find("div", class_="news-link-right").get_text(strip=True).strip("() ") if cells[1].find("div", class_="news-link-right") else "Finviz",
+                        "Date": cells[0].text.strip()
+                    })
+            return news_list
+        except:
+            return []
+
+# ────────────────────────────────────────────────
+#  MAIN UI
+# ────────────────────────────────────────────────
 market_df, intra_data = fetch_market_snapshot()
 est = pytz.timezone('US/Eastern')
 time_now = datetime.datetime.now(est).strftime('%H:%M:%S')
@@ -231,12 +278,10 @@ time_now = datetime.datetime.now(est).strftime('%H:%M:%S')
 st.title("🏛️ Alpha Terminal Pro")
 st.caption(f"EST {time_now} | Data as of {datetime.date.today()}")
 
-tabs = st.tabs([
+tab_overview, tab_sectors, tab_gex, tab_options, tab_earnings, tab_analyst, tab_extremes, tab_news = st.tabs([
     "📈 Market Overview", "🔥 Alpha Sectors", "📊 GEX", "🐳 Options",
     "🎯 Earnings", "📊 Tier 1 Analyst Changes", "🔥 ATH/ATL Plays", "📰 News Wire"
 ])
-
-tab_overview, tab_sectors, tab_gex, tab_options, tab_earnings, tab_analyst, tab_extremes, tab_news = tabs
 
 with tab_overview:
     st.subheader("🗝️ Key Indices")
@@ -361,14 +406,14 @@ with tab_news:
     if headlines:
         total_score = 0
         for item in headlines:
-            title = item.get('Title') or "No title"
-            url = item.get('URL') or "#"
+            title = item.get('Title') or item.get('title') or "No title"
+            url = item.get('URL') or item.get('Link') or "#"
             source = item.get('Source') or "Finviz"
             label, score = get_sentiment_score(title)
             total_score += score
             with st.expander(f"{label} | {title}"):
                 st.write(f"**Source:** {source}")
-                st.write(f"[Link]({url})")
+                st.write(f"[Full Story]({url})")
         st.sidebar.metric("Sentiment Pulse", total_score, delta="Positive" if total_score >= 0 else "Negative")
     else:
         st.error("News feed currently unavailable.")
