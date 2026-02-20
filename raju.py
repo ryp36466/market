@@ -28,13 +28,11 @@ MAG7_TICKERS = {"Apple": "AAPL", "MSFT": "MSFT", "Nvidia": "NVDA", "Amazon": "AM
                 "Google": "GOOGL", "Meta": "META", "Tesla": "TSLA"}
 ALL_TICKERS = {**GLOBAL_TICKERS, **SECTOR_TICKERS, **MAG7_TICKERS}
 
-# Huge / large-cap filter: only show these symbols in earnings table
-# Based on Feb 19, 2026 reporters + MAG7 + other consistent mega-caps
+# Huge / large-cap filter: only show these in earnings table
 HUGE_CAP_SYMBOLS = {
     'WMT', 'BABA', 'DE', 'SO', 'NEM', 'BKNG', 'TXRH', 'RIO',
-    'AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META', 'TSLA',  # MAG7 always eligible
-    'T', 'VZ', 'XOM', 'CVX', 'JPM', 'BAC', 'WFC', 'PG', 'KO'  # Other perennial huge caps
-    # Add more later if needed (e.g. 'MA', 'V', 'HD', etc.)
+    'AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META', 'TSLA',
+    'T', 'VZ', 'XOM', 'CVX', 'JPM', 'BAC', 'WFC', 'PG', 'KO'
 }
 
 # ========================== CORE HELPERS ==========================
@@ -93,7 +91,7 @@ def fetch_market_snapshot():
             continue
     return pd.DataFrame(rows), intra
 
-# ========================== EARNINGS (huge-cap filter only) ==========================
+# ========================== EARNINGS (huge-cap filter) ==========================
 def get_earnings_for_date(date_str):
     url = f"https://api.nasdaq.com/api/calendar/earnings?date={date_str}"
     headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.nasdaq.com/"}
@@ -144,8 +142,7 @@ def get_earnings_for_date(date_str):
                     "Rev Beat": "✅ Beat" if rev_beat else "❌ Miss" if rev_beat is False else "—",
                 })
         return rows
-    except Exception as e:
-        st.warning(f"Earnings API error: {e}")
+    except:
         return []
 
 def get_todays_earnings():
@@ -169,12 +166,11 @@ def get_tomorrows_earnings():
     for d in data: d["When"] = "Tomorrow"
     return data
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=1800)
 def get_earnings_data(ticker_dict: dict):
     earnings_list = []
     est = pytz.timezone('US/Eastern')
     now = datetime.datetime.now(est)
-    today_str = now.strftime('%Y-%m-%d')
     for label, sym in ticker_dict.items():
         try:
             tk = yf.Ticker(sym)
@@ -188,23 +184,29 @@ def get_earnings_data(ticker_dict: dict):
                 future = hist[hist.index > now]
                 if not future.empty:
                     next_date = future.index[0].strftime('%Y-%m-%d')
-                    if next_date == today_str:
+                    if next_date == now.strftime('%Y-%m-%d'):
                         is_today = True
                 reported = hist.dropna(subset=['Reported EPS'])
                 if not reported.empty:
                     recent = reported.iloc[0]
-                    latest_eps = round(recent['Reported EPS'], 2)
+                    latest_eps = round(recent['Reported EPS'], 2) if 'Reported EPS' in recent else "N/A"
                     if 'Surprise(%)' in recent:
                         surprise_pct = round(recent['Surprise(%)'], 2)
                         status = "✅ Beat" if surprise_pct > 0 else "❌ Miss" if surprise_pct < 0 else "Met"
-            earnings_list.append({
-                "Asset": label, "Next Date": next_date, "Last EPS": latest_eps,
-                "Surprise (%)": surprise_pct, "Status": status,
-                "Today?": "📢 TODAY" if is_today else ""
-            })
         except:
-            continue
-    return pd.DataFrame(earnings_list)
+            pass  # silent fail → default values
+
+        earnings_list.append({
+            "Asset": label,
+            "Next Date": next_date,
+            "Last EPS": latest_eps,
+            "Surprise (%)": surprise_pct,
+            "Status": status,
+            "Today?": "📢 TODAY" if is_today else ""
+        })
+    
+    df = pd.DataFrame(earnings_list)
+    return df
 
 # ========================== NEWS ==========================
 def get_finviz_news_stable():
@@ -246,7 +248,6 @@ tab_overview, tab_sectors, tab_gex, tab_options, tab_earnings, tab_extremes, tab
     "🎯 Earnings", "🔥 ATH/ATL Plays", "📰 News Wire"
 ])
 
-# ==================== OVERVIEW ====================
 with tab_overview:
     st.subheader("🗝️ Key Indices")
     key_df = market_df[market_df['Asset'].isin(["S&P 500", "SPY", "QQQ"])][['Asset', 'Price', 'Change %', 'RVOL']].round(2)
@@ -276,14 +277,12 @@ with tab_overview:
         fig.update_layout(template="plotly_dark", height=500)
         st.plotly_chart(fig, use_container_width=True)
 
-# ==================== SECTORS ====================
 with tab_sectors:
     sect_data = market_df[market_df['Asset'].isin(SECTOR_TICKERS.keys())].copy()
     st.dataframe(sect_data[['Asset', 'Price', 'Change %', 'RVOL']]
                  .style.background_gradient(cmap='RdYlGn', subset=['Change %', 'RVOL']),
                  hide_index=True, use_container_width=True)
 
-# ==================== GEX ====================
 with tab_gex:
     st.subheader("📊 Gamma Exposure (GEX) Analysis")
     user_ticker = st.text_input("Enter Ticker for GEX", value="SPY").upper().strip()
@@ -317,7 +316,6 @@ with tab_gex:
         except Exception as e:
             st.error(f"Error: {str(e)}")
 
-# ==================== OPTIONS ====================
 with tab_options:
     st.subheader("🐳 Put/Call Volume Ratio")
     pcr_df = get_pcr_data()
@@ -326,10 +324,9 @@ with tab_options:
     else:
         st.info("Gathering options flow...")
 
-# ==================== EARNINGS TAB – HUGE CAP ONLY ====================
 with tab_earnings:
     st.subheader("🎯 Earnings – Mega / Huge-Cap Focus Only")
-    st.caption("Filtered to major companies only (e.g. Walmart, Deere, Alibaba, Southern Co., Newmont, Booking + MAG7 if reporting) • Revenue in $B")
+    st.caption("Showing only major companies (Walmart, Deere, Alibaba, Southern Co., Newmont, Booking + MAG7 when reporting) • Revenue in $B")
 
     today_data    = get_todays_earnings()
     yest_data     = get_yesterdays_earnings()
@@ -339,37 +336,48 @@ with tab_earnings:
 
     if all_events:
         df = pd.DataFrame(all_events)
-        
         order = {"Yesterday": 0, "Today": 1, "Tomorrow": 2}
-        df['sort_key'] = df['When'].map(order)
+        df['sort_key'] = df['When'].map(order).fillna(999)
         df = df.sort_values(['sort_key', 'Symbol']).drop(columns=['sort_key'])
-        
+
         def highlight_beats(val):
             if val == "✅ Beat": return 'background-color: #00cc66; color: black; font-weight: bold;'
             if val == "❌ Miss": return 'background-color: #ff4d4d; color: white; font-weight: bold;'
             return ''
-        
+
         styled = df.style.applymap(highlight_beats, subset=['EPS Beat', 'Rev Beat']) \
-                         .format(precision=2, na_rep="—", thousands=",", subset=[
+                         .format(precision=2, na_rep="—", subset=[
                              'EPS Est', 'EPS Act', 'EPS Surprise %',
                              'Rev Est (B)', 'Rev Act (B)', 'Rev Surprise %'
                          ])
-        
-        st.dataframe(styled, hide_index=True, use_container_width=True)
-        
-        st.metric("Reports Summary", f"Today: {len(today_data)} | Yest: {len(yest_data)} | Tom: {len(tomorrow_data)}")
-        
-        mag_next = get_earnings_data(MAG7_TICKERS)
-        upcoming = mag_next[mag_next['Next Date'] != "TBD"].sort_values('Next Date')
-        if not upcoming.empty:
-            next_c = upcoming.iloc[0]
-            days = (pd.to_datetime(next_c['Next Date']) - datetime.datetime.now(est).date()).days
-            day_txt = "TODAY" if days == 0 else f"in {days} days"
-            st.info(f"🚀 Next MAG7: **{next_c['Asset']}** on {next_c['Next Date']} ({day_txt})")
-    else:
-        st.info("No huge-cap earnings detected for today/yesterday/tomorrow (or data fetch issue). Refresh in a bit.")
 
-# ==================== ATH/ATL & NEWS ====================
+        st.dataframe(styled, hide_index=True, use_container_width=True)
+
+        st.metric("Reports Summary", f"Today: {len(today_data)} | Yesterday: {len(yest_data)} | Tomorrow: {len(tomorrow_data)}")
+    else:
+        st.info("No huge-cap earnings found for today/yesterday/tomorrow (or temporary API issue).")
+
+    # MAG7 upcoming – with safety checks
+    mag_next = get_earnings_data(MAG7_TICKERS)
+
+    if not mag_next.empty and 'Next Date' in mag_next.columns:
+        upcoming = mag_next[
+            mag_next['Next Date'].notna() &
+            (mag_next['Next Date'] != "TBD")
+        ].copy()
+
+        if not upcoming.empty:
+            upcoming['Next Date dt'] = pd.to_datetime(upcoming['Next Date'], errors='coerce')
+            upcoming = upcoming.sort_values('Next Date dt').reset_index(drop=True)
+            next_c = upcoming.iloc[0]
+            days = (next_c['Next Date dt'].date() - datetime.datetime.now(est).date()).days
+            day_txt = "TODAY" if days == 0 else "tomorrow" if days == 1 else f"in {days} days" if days > 0 else f"{abs(days)} days ago"
+            st.info(f"🚀 **Next MAG7 catalyst:** {next_c['Asset']} on **{next_c['Next Date']}** ({day_txt})")
+        else:
+            st.info("No upcoming MAG7 earnings dates available right now.")
+    else:
+        st.info("MAG7 upcoming earnings data currently unavailable (yfinance fetch issue).")
+
 with tab_extremes:
     st.info("ATH/ATL scanner – coming soon")
 
@@ -389,6 +397,6 @@ with tab_news:
                 st.write(f"[Link]({url})")
         st.sidebar.metric("Sentiment Pulse", total_score, delta="Positive" if total_score >= 0 else "Negative")
     else:
-        st.error("News unavailable.")
+        st.error("News feed currently unavailable.")
 
 st_autorefresh(interval=30000, key="global_refresh")
