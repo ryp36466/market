@@ -288,9 +288,10 @@ def get_marketbeat_ratings():
     return df
 
 
-def get_finviz_news_stable():
+@st.cache_data(ttl=300)
+def get_macro_news():
     try:
-        return News().get_news()['news'].head(15).to_dict('records')
+        return News().get_news()['news'].head(25).to_dict('records')
     except:
         try:
             headers = {"User-Agent": "Mozilla/5.0"}
@@ -299,7 +300,7 @@ def get_finviz_news_stable():
             table = soup.find("table", id="news-table")
             if not table: return []
             news_list = []
-            for row in table.find_all("tr")[:15]:
+            for row in table.find_all("tr")[:25]:
                 cells = row.find_all("td")
                 if len(cells) != 2: continue
                 a = cells[1].find("a", class_="tab-link-news")
@@ -318,12 +319,12 @@ est = pytz.timezone('US/Eastern')
 time_now = datetime.datetime.now(est).strftime('%H:%M:%S')
 
 st.title("🏛️ Alpha Terminal Pro")
-st.caption(f"EST {time_now} | Data as of {datetime.date.today()} | Day-Trader Edition with Gamma Flip")
+st.caption(f"EST {time_now} | Data as of {datetime.date.today()} | Day-Trader Edition with Macro Pulse")
 
-tab_overview, tab_sectors, tab_themes, tab_rel_strength, tab_gex, tab_options, tab_earnings, tab_analyst, tab_extremes, tab_news = st.tabs([
+tab_overview, tab_sectors, tab_themes, tab_rel_strength, tab_gex, tab_options, tab_earnings, tab_analyst, tab_macro, tab_extremes, tab_news = st.tabs([
     "📈 Market Overview", "🔥 Alpha Sectors", "🎯 Trading Themes", "⚖️ Relative Strength",
     "📊 GEX + Gamma Flip", "🐳 Options", "🎯 Earnings", "📊 Analyst Ratings (MarketBeat)",
-    "🔥 ATH/ATL Plays", "📰 Theme News"
+    "🌍 Macro News", "🔥 ATH/ATL Plays", "📰 Theme Stocks News"
 ])
 
 with tab_overview:
@@ -559,11 +560,48 @@ with tab_analyst:
     else:
         st.info("Fetching latest analyst data from MarketBeat...")
 
+with tab_macro:
+    st.subheader("🌍 Macro & Market-Moving News")
+    st.caption("High-impact news affecting the broader market • Fed, Trump, geopolitics, economic data")
+    
+    macro_news = get_macro_news()
+    
+    if macro_news:
+        total_score = 0
+        trump_news = [item for item in macro_news if any(k in item.get('Title','').lower() for k in ['trump', 'president', 'white house', 'tariff', 'election', 'fed', 'inflation'])]
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("### 📈 All Macro Headlines")
+            for item in macro_news[:15]:
+                label, score = get_sentiment_score(item.get('Title', ''))
+                total_score += score
+                with st.expander(f"{label} | {item.get('Title')[:85]}{'...' if len(item.get('Title','')) > 85 else ''}"):
+                    st.write(f"**Source:** {item.get('Source')} | {item.get('Date')}")
+                    st.write(f"[🔗 Read]({item.get('URL')})")
+        
+        with col2:
+            st.markdown("### 🇺🇸 Trump / Political Impact")
+            if trump_news:
+                for item in trump_news[:10]:
+                    label, score = get_sentiment_score(item.get('Title', ''))
+                    with st.expander(f"{label} | {item.get('Title')[:80]}{'...' if len(item.get('Title','')) > 80 else ''}"):
+                        st.write(f"**Source:** {item.get('Source')} | {item.get('Date')}")
+                        st.write(f"[🔗 Read]({item.get('URL')})")
+            else:
+                st.info("No major Trump-related headlines right now")
+        
+        st.sidebar.metric("Macro Sentiment Pulse", total_score,
+                         delta="Bullish" if total_score >= 0 else "Bearish")
+    else:
+        st.info("Fetching macro news from Finviz...")
+
 with tab_extremes:
     st.info("ATH/ATL scanner – coming soon")
 
 with tab_news:
-    st.subheader("📰 Trading Themes News")
+    st.subheader("📰 Theme Stocks News")
     st.caption("Latest news from **all stocks in your Trading Themes** • Scored live for sentiment")
     
     news_df = get_theme_stock_news()
