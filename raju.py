@@ -1,4 +1,3 @@
-
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -19,7 +18,7 @@ from scipy.stats import norm
 st.set_page_config(page_title="Alpha Terminal Pro", page_icon="🏛️", layout="wide")
 
 # ────────────────────────────────────────────────
-#  TICKER CONFIGS
+#  TICKER CONFIGS + TRADING THEMES
 # ────────────────────────────────────────────────
 GLOBAL_TICKERS = {
     "S&P 500 (ES)": "ES=F", "Nasdaq (NQ)": "NQ=F", "Dow (YM)": "YM=F",
@@ -56,8 +55,26 @@ MAG7_TICKERS = {
     "Google": "GOOGL", "Meta": "META", "Tesla": "TSLA"
 }
 
-# Combine all for background fetching
+# ────── NEW: TRADING THEMES (added upfront) ──────
+TRADING_THEMES = {
+    "🔵 SEMICONDUCTORS (SMH/SOXL)": ["SMH", "SOXL", "NVDA", "AMD", "AVGO", "QCOM", "INTC", "MU", "MRVL", "TSM", "ARM", "SMCI", "WDC", "ALAB"],
+    "🟣 SOFTWARE / SaaS (IGV)": ["IGV", "MSFT", "CRM", "NOW", "ADBE", "CRWD", "MDB", "PLTR", "RBRK", "ORCL", "IBM"],
+    "🟢 NEO CLOUD / AI INFRA": ["CRWD", "NBIS", "APP", "ALAB", "RBRK", "PLTR", "SMCI", "DELL"],
+    "🟡 MEGA CAP TECH (QQQ)": ["QQQ", "META", "GOOGL", "AAPL", "AMZN", "MSFT", "NVDA", "TSLA"],
+    "🟠 CRYPTO / BTC": ["BTC-USD", "IBIT", "MSTR", "COIN", "CIFR", "IREN", "BMNR", "CRCL"],
+    "🟤 SMALL CAPS (IWM/TNA)": ["IWM", "TNA", "QBTS", "RGTI", "ASTS", "OKLO", "TEM"],
+    "🔴 CONSUMER / HIGH BETA": ["AMZN", "TSLA", "RBLX", "CVNA", "RIVN", "LULU", "NKE", "DUOL", "AAL"],
+    "🏦 FINANCIALS": ["JPM", "SOFI", "HOOD", "LMND", "UNH"],
+    "⚡ ENERGY": ["XOM", "OXY", "BE", "OKLO"],
+    "🏗️ INDUSTRIALS/SPACE": ["CAT", "BA", "RKLB", "ASTS", "FDX"],
+    "🏥 HEALTHCARE": ["LLY", "UNH", "TEM"],
+    "🥇 COMMODITIES/METALS": ["GC=F", "SLV", "AGQ", "ZSL", "ALB", "MP"]
+}
+
+# Combine ALL tickers for background fetching (themes added last)
 ALL_TICKERS = {**GLOBAL_TICKERS, **SECTOR_TICKERS, **NEO_CLOUD_TICKERS, **MAG7_TICKERS}
+theme_flat_list = [item for sublist in TRADING_THEMES.values() for item in sublist]
+ALL_TICKERS.update({sym: sym for sym in theme_flat_list})   # label = symbol for theme entries
 
 HUGE_CAP_SYMBOLS = {
     'WMT', 'BABA', 'DE', 'SO', 'NEM', 'BKNG', 'TXRH', 'RIO',
@@ -82,9 +99,7 @@ FINNHUB_API_KEY = "d6au4n9r01qnr27itio0d6au4n9r01qnr27itiog"
 @st.cache_data(ttl=45)
 def fetch_market_snapshot():
     symbols = list(ALL_TICKERS.values())
-    # 5-day Daily for RVOL and Relative Strength
     hist_data = yf.download(symbols, period="5d", interval="1d", progress=False)
-    # Today's Intraday
     intra = yf.download(symbols, period="1d", interval="5m", prepost=True, progress=False)
     
     rows = []
@@ -100,6 +115,7 @@ def fetch_market_snapshot():
         except:
             continue
     return pd.DataFrame(rows), intra, hist_data
+
 
 def get_earnings_calendar_finnhub(date_str):
     url = f"https://finnhub.io/api/v1/calendar/earnings?from={date_str}&to={date_str}&token={FINNHUB_API_KEY}"
@@ -128,11 +144,13 @@ def get_earnings_calendar_finnhub(date_str):
         return filtered if filtered else fallback
     except: return []
 
+
 def get_todays_earnings():
     today = datetime.datetime.now(pytz.timezone('US/Eastern')).date().strftime('%Y-%m-%d')
     data = get_earnings_calendar_finnhub(today)
     for d in data: d["When"] = "Today"
     return data
+
 
 def get_yesterdays_earnings():
     yest = (datetime.datetime.now(pytz.timezone('US/Eastern')) - datetime.timedelta(days=1)).date().strftime('%Y-%m-%d')
@@ -140,11 +158,13 @@ def get_yesterdays_earnings():
     for d in data: d["When"] = "Yesterday"
     return data
 
+
 def get_tomorrows_earnings():
     tom = (datetime.datetime.now(pytz.timezone('US/Eastern')) + datetime.timedelta(days=1)).date().strftime('%Y-%m-%d')
     data = get_earnings_calendar_finnhub(tom)
     for d in data: d["When"] = "Tomorrow"
     return data
+
 
 @st.cache_data(ttl=900)
 def get_analyst_changes_yfinance(days_back=10):
@@ -165,6 +185,7 @@ def get_analyst_changes_yfinance(days_back=10):
         df = df.sort_values("Date", ascending=False).drop_duplicates(subset=["Date", "Symbol", "Firm", "To"])
     return df
 
+
 def get_pcr_data():
     targets = {**MAG7_TICKERS, "SPY": "SPY", "QQQ": "QQQ"}
     results = []
@@ -181,6 +202,7 @@ def get_pcr_data():
         except: continue
     return pd.DataFrame(results)
 
+
 def get_sentiment_score(text):
     bull = ['upbeat','growth','surge','rally','beat','buy','bullish','expansion','profit','gain','positive','jump']
     bear = ['slump','drop','fall','miss','sell','bearish','contraction','loss','negative','inflation','fear','risk','sink']
@@ -189,12 +211,14 @@ def get_sentiment_score(text):
     if score < 0: return "🔴 Bearish", score
     return "⚪ Neutral", 0
 
+
 def calc_gamma_vectorized(S, K, T, v, r, q, types, OI):
     T = np.maximum(T, 1/365); v = np.maximum(v, 0.01)
     d1 = (np.log(S / K) + (r - q + 0.5 * v**2) * T) / (v * np.sqrt(T))
     gamma = np.exp(-q * T) * norm.pdf(d1) / (S * v * np.sqrt(T))
     val = (OI * 100) * (S**2) * 0.01 * gamma
     return np.where(types == 'call', val, -val)
+
 
 def get_finviz_news_stable():
     try: return News().get_news()['news'].head(15).to_dict('records')
@@ -223,9 +247,18 @@ time_now = datetime.datetime.now(est).strftime('%H:%M:%S')
 st.title("🏛️ Alpha Terminal Pro")
 st.caption(f"EST {time_now} | Data as of {datetime.date.today()} | Day-Trader Edition with Gamma Flip")
 
-tab_overview, tab_sectors, tab_rel_strength, tab_gex, tab_options, tab_earnings, tab_analyst, tab_extremes, tab_news = st.tabs([
-    "📈 Market Overview", "🔥 Alpha Sectors", "⚖️ Relative Strength", "📊 GEX + Gamma Flip", "🐳 Options",
-    "🎯 Earnings", "📊 Analyst Changes", "🔥 ATH/ATL Plays", "📰 News Wire"
+# Tabs with Trading Themes integrated
+tab_overview, tab_sectors, tab_themes, tab_rel_strength, tab_gex, tab_options, tab_earnings, tab_analyst, tab_extremes, tab_news = st.tabs([
+    "📈 Market Overview", 
+    "🔥 Alpha Sectors", 
+    "🎯 Trading Themes", 
+    "⚖️ Relative Strength", 
+    "📊 GEX + Gamma Flip", 
+    "🐳 Options",
+    "🎯 Earnings", 
+    "📊 Analyst Changes", 
+    "🔥 ATH/ATL Plays", 
+    "📰 News Wire"
 ])
 
 with tab_overview:
@@ -256,6 +289,29 @@ with tab_sectors:
                      .style.background_gradient(cmap='RdYlGn', subset=['Change %', 'RVOL']),
                      hide_index=True, use_container_width=True)
 
+# ────── NEW TRADING THEMES TAB ──────
+with tab_themes:
+    st.subheader("🎯 Active Trading Themes")
+    st.caption("Categorized buckets to identify leading/lagging sectors at the open.")
+
+    cols = st.columns(2)
+    for i, (theme, tickers) in enumerate(TRADING_THEMES.items()):
+        with cols[i % 2]:
+            st.markdown(f"#### {theme}")
+            theme_df = market_df[market_df['Symbol'].isin(tickers)].copy()
+            
+            if not theme_df.empty:
+                theme_df = theme_df.sort_values('Change %', ascending=False)
+                st.dataframe(
+                    theme_df[['Symbol', 'Price', 'Change %', 'RVOL']].style
+                    .background_gradient(cmap='RdYlGn', subset=['Change %'])
+                    .format({"Price": "${:,.2f}", "Change %": "{:+.2f}%", "RVOL": "{:.2f}x"}),
+                    hide_index=True, 
+                    use_container_width=True
+                )
+            else:
+                st.warning(f"No data for {theme}")
+
 with tab_rel_strength:
     st.subheader("⚖️ Sector Strength vs SPY")
     st.caption("5-Day Cumulative Performance normalized to 0%")
@@ -278,7 +334,6 @@ with tab_rel_strength:
                      hide_index=True, use_container_width=True)
     except Exception as e: st.error(f"RS Error: {e}")
 
-    # ==================== NEW MAG7 vs QQQ CHART ====================
     st.subheader("⚖️ Mag7 Strength vs QQQ")
     st.caption("5-Day Cumulative Performance normalized to 0%")
     try:
@@ -333,26 +388,20 @@ with tab_gex:
                 
                 df_agg = (df_g.groupby('strike')['GEX'].sum() / 1e6).sort_index()
                 
-                # ====================== GAMMA FLIP CALCULATION ======================
+                # Gamma Flip Calculation
                 strikes = np.asarray(df_agg.index)
                 gex_vals = np.asarray(df_agg.values)
-                
-                flip_level = spot  # fallback
+                flip_level = spot
                 for i in range(1, len(strikes)):
                     if gex_vals[i-1] <= 0 and gex_vals[i] > 0:
-                        # Linear interpolation at zero crossing
                         x1, y1 = strikes[i-1], gex_vals[i-1]
                         x2, y2 = strikes[i], gex_vals[i]
                         flip_level = x1 - y1 * (x2 - x1) / (y2 - y1)
                         break
-                
-                # Fallback: highest strike still showing negative GEX
                 if abs(flip_level - spot) < 0.1 and np.any(gex_vals < 0):
                     flip_level = strikes[gex_vals < 0][-1]
-                
                 flip_level = round(flip_level)
                 
-                # ====================== METRICS ======================
                 col1, col2, col3 = st.columns(3)
                 with col1:
                     st.metric(
@@ -374,7 +423,6 @@ with tab_gex:
                           "Above flip = dealers long gamma (dampens moves). Below = short gamma (amplifies moves). "
                           "Key intraday level for day traders.")
                 
-                # ====================== PLOT ======================
                 fig = go.Figure()
                 fig.add_trace(go.Bar(
                     x=df_agg.index,
@@ -382,22 +430,11 @@ with tab_gex:
                     marker_color=['#00ff88' if x > 0 else '#ff4444' for x in df_agg.values],
                     name="GEX ($M)"
                 ))
-                
-                fig.add_vline(
-                    x=spot,
-                    line_dash="dash",
-                    line_color="white",
-                    annotation_text=f"Spot ${spot}",
-                    annotation_position="top"
-                )
-                fig.add_vline(
-                    x=flip_level,
-                    line_dash="dot",
-                    line_color="#ffd700",
-                    line_width=3,
-                    annotation_text=f"🔄 GAMMA FLIP ${flip_level}",
-                    annotation_position="bottom right" if flip_level < spot else "top left"
-                )
+                fig.add_vline(x=spot, line_dash="dash", line_color="white",
+                              annotation_text=f"Spot ${spot}", annotation_position="top")
+                fig.add_vline(x=flip_level, line_dash="dot", line_color="#ffd700", line_width=3,
+                              annotation_text=f"🔄 GAMMA FLIP ${flip_level}",
+                              annotation_position="bottom right" if flip_level < spot else "top left")
                 
                 fig.update_layout(
                     template="plotly_dark",
@@ -455,58 +492,5 @@ with tab_news:
                 st.write(f"Source: {item.get('Source')}")
                 st.write(f"[Link]({item.get('URL')})")
         st.sidebar.metric("Sentiment Pulse", total_score, delta="Positive" if total_score >= 0 else "Negative")
-
-
-# 1. Update your TICKER CONFIGS to include the new themes
-TRADING_THEMES = {
-    "🔵 SEMICONDUCTORS (SMH/SOXL)": ["SMH", "SOXL", "NVDA", "AMD", "AVGO", "QCOM", "INTC", "MU", "MRVL", "TSM", "ARM", "SMCI", "WDC", "ALAB"],
-    "🟣 SOFTWARE / SaaS (IGV)": ["IGV", "MSFT", "CRM", "NOW", "ADBE", "CRWD", "MDB", "PLTR", "RBRK", "ORCL", "IBM"],
-    "🟢 NEO CLOUD / AI INFRA": ["CRWV", "NBIS", "APP", "ALAB", "RBRK", "PLTR", "SMCI", "DELL"],
-    "🟡 MEGA CAP TECH (QQQ)": ["QQQ", "META", "GOOGL", "AAPL", "AMZN", "MSFT", "NVDA", "TSLA"],
-    "🟠 CRYPTO / BTC": ["BTC-USD", "IBIT", "MSTR", "COIN", "CIFR", "IREN", "BMNR", "CRCL"],
-    "🟤 SMALL CAPS (IWM/TNA)": ["IWM", "TNA", "QBTS", "RGTI", "ASTS", "OKLO", "TEM"],
-    "🔴 CONSUMER / HIGH BETA": ["AMZN", "TSLA", "RBLX", "CVNA", "RIVN", "LULU", "NKE", "DUOL", "AAL"],
-    "🏦 FINANCIALS": ["JPM", "SOFI", "HOOD", "LMND", "UNH"],
-    "⚡ ENERGY": ["XOM", "OXY", "BE", "OKLO"],
-    "🏗️ INDUSTRIALS/SPACE": ["CAT", "BA", "RKLB", "ASTS", "FDX"],
-    "🏥 HEALTHCARE": ["LLY", "UNH", "TEM"],
-    "🥇 COMMODITIES/METALS": ["GC=F", "SLV", "AGQ", "ZSL", "ALB", "MP"]
-}
-
-# Ensure all these are added to your background fetching list
-theme_flat_list = [item for sublist in TRADING_THEMES.values() for item in sublist]
-ALL_TICKERS.update({sym: sym for sym in theme_flat_list})
-
-# 2. Update your tabs list
-# Add "🎯 Trading Themes" to your st.tabs([]) call
-
-# 3. Add the logic for the new tab
-with tab_themes:
-    st.subheader("🎯 Active Trading Themes")
-    st.caption("Categorized buckets to identify leading/lagging sectors at the open.")
-
-    # We use a loop to create a clean grid of tables
-    cols = st.columns(2)  # 2 columns of tables for better scannability
-    
-    for i, (theme, tickers) in enumerate(TRADING_THEMES.items()):
-        with cols[i % 2]:
-            st.markdown(f"#### {theme}")
-            # Filter the main market_df for tickers in this theme
-            theme_df = market_df[market_df['Symbol'].isin(tickers)].copy()
-            
-            if not theme_df.empty:
-                # Sort by Change % to see the leaders at the top
-                theme_df = theme_df.sort_values('Change %', ascending=False)
-                
-                # Apply styling for a "Heatmap" feel
-                st.dataframe(
-                    theme_df[['Symbol', 'Price', 'Change %', 'RVOL']].style.background_gradient(
-                        cmap='RdYlGn', subset=['Change %']
-                    ).format({"Price": "${:,.2f}", "Change %": "{:+.2f}%", "RVOL": "{:.2f}x"}),
-                    hide_index=True, 
-                    use_container_width=True
-                )
-            else:
-                st.warning(f"No data for {theme}")
 
 st_autorefresh(interval=300000, key="global_refresh")
