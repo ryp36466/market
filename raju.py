@@ -170,36 +170,6 @@ def get_tomorrows_earnings():
     return data
 
 
-@st.cache_data(ttl=900)
-def get_analyst_changes_yfinance(days_back=10):
-    symbols_to_check = ANALYST_SYMBOLS
-    all_changes = []
-    for symbol in symbols_to_check:
-        try:
-            tk = yf.Ticker(symbol)
-            rec = tk.recommendations
-            if rec is None or rec.empty: continue
-            rec = rec[rec.index >= pd.Timestamp.now() - pd.Timedelta(days=days_back)]
-            for idx, row in rec.iterrows():
-                firm = row.get('Firm', 'Unknown')
-                if firm not in TIER1_FIRMS and 'Unknown' not in firm: continue
-                all_changes.append({
-                    "Date": idx.strftime('%Y-%m-%d'),
-                    "Symbol": symbol,
-                    "Asset": symbol_to_label.get(symbol, symbol),
-                    "Firm": firm,
-                    "Action": row.get('Action', 'Change'),
-                    "From": row.get('From Grade', '—'),
-                    "To": row.get('To Grade', '—')
-                })
-        except:
-            continue
-    df = pd.DataFrame(all_changes)
-    if not df.empty:
-        df = df.sort_values("Date", ascending=False).drop_duplicates(subset=["Date", "Symbol", "Firm", "To"])
-    return df
-
-
 def get_pcr_data():
     targets = {**MAG7_TICKERS, "SPY": "SPY", "QQQ": "QQQ"}
     results = []
@@ -232,7 +202,7 @@ def get_sentiment_score(text):
     return "⚪ Neutral", 0
 
 
-# ────── FIXED NEWS: Pure Finviz scraper (no extra packages, works on Streamlit Cloud) ──────
+# ────── Theme Stocks News (pure Finviz scraper) ──────
 @st.cache_data(ttl=180)
 def get_theme_stock_news(max_stocks=30):
     news_items = []
@@ -281,6 +251,40 @@ def get_theme_stock_news(max_stocks=30):
     return df
 
 
+# ────── NEW: Finviz Analyst Ratings (pure scraper - no extra packages) ──────
+@st.cache_data(ttl=3600)   # cache 1 hour - ratings don't change every minute
+def get_finviz_analyst_ratings():
+    ratings = []
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    
+    for sym in ANALYST_SYMBOLS:
+        try:
+            f_sym = "BTC" if sym == "BTC-USD" else sym.split("=")[0]
+            url = f"https://finviz.com/quote.ashx?t={f_sym.upper()}"
+            r = requests.get(url, headers=headers, timeout=10)
+            soup = BeautifulSoup(r.text, "html.parser")
+            
+            # Analyst Recom
+            recom_tag = soup.find(string=lambda x: x and "Analyst Recom" in x)
+            rating_num = recom_tag.find_next("td").text.strip() if recom_tag else "—"
+            
+            # Target Price
+            target_tag = soup.find(string=lambda x: x and "Target Price" in x)
+            target_price = target_tag.find_next("td").text.strip().replace("$", "").strip() if target_tag else "—"
+            
+            ratings.append({
+                "Asset": symbol_to_label.get(sym, sym),
+                "Symbol": sym,
+                "Rating": rating_num,
+                "Target Price": target_price
+            })
+        except:
+            continue
+    
+    df = pd.DataFrame(ratings)
+    return df
+
+
 def get_finviz_news_stable():
     try:
         return News().get_news()['news'].head(15).to_dict('records')
@@ -315,7 +319,7 @@ st.caption(f"EST {time_now} | Data as of {datetime.date.today()} | Day-Trader Ed
 
 tab_overview, tab_sectors, tab_themes, tab_rel_strength, tab_gex, tab_options, tab_earnings, tab_analyst, tab_extremes, tab_news = st.tabs([
     "📈 Market Overview", "🔥 Alpha Sectors", "🎯 Trading Themes", "⚖️ Relative Strength",
-    "📊 GEX + Gamma Flip", "🐳 Options", "🎯 Earnings", "📊 Analyst Changes",
+    "📊 GEX + Gamma Flip", "🐳 Options", "🎯 Earnings", "📊 Analyst Ratings (Finviz)",
     "🔥 ATH/ATL Plays", "📰 Theme News"
 ])
 
@@ -522,28 +526,47 @@ with tab_earnings:
         st.dataframe(df.style.applymap(highlight_beats, subset=['EPS Beat', 'Rev Beat']), hide_index=True, use_container_width=True)
 
 with tab_analyst:
-    st.subheader("📊 Recent Analyst Changes")
-    st.caption(f"Scanning {len(ANALYST_SYMBOLS)} stocks from Trading Themes • Only Tier-1 firms")
-    analyst_df = get_analyst_changes_yfinance()
+    st.subheader("📊 Analyst Ratings & Price Targets (Finviz)")
+    st.caption("Current consensus rating + average price target for all Trading Themes stocks")
+    
+    analyst_df = get_finviz_analyst_ratings()
+    
     if not analyst_df.empty:
-        def highlight_action(val):
-            if "Upgrade" in str(val): return 'background-color: #00cc66; color: black; font-weight: bold;'
-            if "Downgrade" in str(val): return 'background-color: #ff4d4d; color: white; font-weight: bold;'
-            return ''
+        # Merge current price
+        price_map = market_df.set_index('Symbol')['Price'].to_dict()
+        analyst_df['Current Price'] = analyst_df['Symbol'].map(price_map)
+        
+        analyst_df['Target Price'] = pd.to_numeric(analyst_df['Target Price'], errors='coerce')
+        analyst_df['Current Price'] = pd.to_numeric(analyst_df['Current Price'], errors='coerce')
+        
+        analyst_df['Upside %'] = ((analyst_df['Target Price'] - analyst_df['Current Price']) / analyst_df['Current Price'] * 100).round(1)
+        
+        # Color rating (lower number = more bullish)
+        def rating_color(val):
+            try:
+                r = float(val)
+                if r <= 1.8: return 'background-color: #00cc66; color: black; font-weight: bold;'
+                if r <= 2.5: return 'background-color: #66ff99; color: black;'
+                if r <= 3.5: return 'background-color: #ffcc66; color: black;'
+                if r <= 4.2: return 'background-color: #ff6666; color: white;'
+                return 'background-color: #cc0000; color: white;'
+            except:
+                return ''
+        
         st.dataframe(
-            analyst_df[['Date', 'Asset', 'Symbol', 'Firm', 'Action', 'From', 'To']]
-            .style.applymap(highlight_action, subset=['Action'])
-            .background_gradient(cmap='RdYlGn', subset=['Date']),
+            analyst_df[['Asset', 'Symbol', 'Rating', 'Target Price', 'Current Price', 'Upside %']]
+            .style.applymap(rating_color, subset=['Rating'])
+            .background_gradient(cmap='RdYlGn', subset=['Upside %'])
+            .format({"Target Price": "${:,.2f}", "Current Price": "${:,.2f}", "Upside %": "{:+.1f}%"}),
             hide_index=True,
             use_container_width=True
         )
     else:
-        st.info("No Tier-1 analyst changes in the last 10 days for the tracked theme stocks.")
+        st.info("No analyst data available at the moment.")
 
 with tab_extremes:
     st.info("ATH/ATL scanner – coming soon")
 
-# ────── FIXED NEWS TAB (Pure Finviz scraper - works everywhere) ──────
 with tab_news:
     st.subheader("📰 Trading Themes News")
     st.caption("Latest news from **all stocks in your Trading Themes** • Scored live for sentiment")
@@ -560,6 +583,6 @@ with tab_news:
                 st.write(f"**Source:** {row['Source']}")
                 st.write(f"[🔗 Read full story]({row['URL']})")
     else:
-        st.info("Fetching fresh news from Finviz... (this usually loads within 5-10 seconds)")
+        st.info("Fetching fresh news from Finviz... (usually loads in 5-10 seconds)")
 
 st_autorefresh(interval=300000, key="global_refresh")
