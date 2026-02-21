@@ -97,13 +97,14 @@ FINNHUB_API_KEY = "d6au4n9r01qnr27itio0d6au4n9r01qnr27itiog"
 # ────────────────────────────────────────────────
 
 @st.cache_data(ttl=45)
+# Replace your current loop in fetch_market_snapshot with this:
 def fetch_market_snapshot():
-    symbols = list(ALL_TICKERS.values())
+    symbols = list(set(ALL_TICKERS.values())) # Use set() to ensure unique symbols
     hist_data = yf.download(symbols, period="5d", interval="1d", progress=False)
     intra = yf.download(symbols, period="1d", interval="5m", prepost=True, progress=False)
     
     rows = []
-    for label, sym in ALL_TICKERS.items():
+    for sym in symbols: # Loop through unique symbols ONLY
         try:
             price = intra['Close'][sym].dropna().iloc[-1]
             prev_close = hist_data['Close'][sym].iloc[-2]
@@ -111,7 +112,13 @@ def fetch_market_snapshot():
             today_vol = intra['Volume'][sym].sum()
             avg_vol = hist_data['Volume'][sym].iloc[-5:-1].mean()
             rvol = today_vol / avg_vol if avg_vol > 0 else 1.0
-            rows.append({"Asset": label, "Symbol": sym, "Price": price, "Change %": change, "RVOL": rvol})
+            
+            rows.append({
+                "Symbol": sym, 
+                "Price": price, 
+                "Change %": change, 
+                "RVOL": rvol
+            })
         except:
             continue
     return pd.DataFrame(rows), intra, hist_data
