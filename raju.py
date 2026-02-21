@@ -456,4 +456,57 @@ with tab_news:
                 st.write(f"[Link]({item.get('URL')})")
         st.sidebar.metric("Sentiment Pulse", total_score, delta="Positive" if total_score >= 0 else "Negative")
 
+
+# 1. Update your TICKER CONFIGS to include the new themes
+TRADING_THEMES = {
+    "🔵 SEMICONDUCTORS (SMH/SOXL)": ["SMH", "SOXL", "NVDA", "AMD", "AVGO", "QCOM", "INTC", "MU", "MRVL", "TSM", "ARM", "SMCI", "WDC", "ALAB"],
+    "🟣 SOFTWARE / SaaS (IGV)": ["IGV", "MSFT", "CRM", "NOW", "ADBE", "CRWD", "MDB", "PLTR", "RBRK", "ORCL", "IBM"],
+    "🟢 NEO CLOUD / AI INFRA": ["CRWV", "NBIS", "APP", "ALAB", "RBRK", "PLTR", "SMCI", "DELL"],
+    "🟡 MEGA CAP TECH (QQQ)": ["QQQ", "META", "GOOGL", "AAPL", "AMZN", "MSFT", "NVDA", "TSLA"],
+    "🟠 CRYPTO / BTC": ["BTC-USD", "IBIT", "MSTR", "COIN", "CIFR", "IREN", "BMNR", "CRCL"],
+    "🟤 SMALL CAPS (IWM/TNA)": ["IWM", "TNA", "QBTS", "RGTI", "ASTS", "OKLO", "TEM"],
+    "🔴 CONSUMER / HIGH BETA": ["AMZN", "TSLA", "RBLX", "CVNA", "RIVN", "LULU", "NKE", "DUOL", "AAL"],
+    "🏦 FINANCIALS": ["JPM", "SOFI", "HOOD", "LMND", "UNH"],
+    "⚡ ENERGY": ["XOM", "OXY", "BE", "OKLO"],
+    "🏗️ INDUSTRIALS/SPACE": ["CAT", "BA", "RKLB", "ASTS", "FDX"],
+    "🏥 HEALTHCARE": ["LLY", "UNH", "TEM"],
+    "🥇 COMMODITIES/METALS": ["GC=F", "SLV", "AGQ", "ZSL", "ALB", "MP"]
+}
+
+# Ensure all these are added to your background fetching list
+theme_flat_list = [item for sublist in TRADING_THEMES.values() for item in sublist]
+ALL_TICKERS.update({sym: sym for sym in theme_flat_list})
+
+# 2. Update your tabs list
+# Add "🎯 Trading Themes" to your st.tabs([]) call
+
+# 3. Add the logic for the new tab
+with tab_themes:
+    st.subheader("🎯 Active Trading Themes")
+    st.caption("Categorized buckets to identify leading/lagging sectors at the open.")
+
+    # We use a loop to create a clean grid of tables
+    cols = st.columns(2)  # 2 columns of tables for better scannability
+    
+    for i, (theme, tickers) in enumerate(TRADING_THEMES.items()):
+        with cols[i % 2]:
+            st.markdown(f"#### {theme}")
+            # Filter the main market_df for tickers in this theme
+            theme_df = market_df[market_df['Symbol'].isin(tickers)].copy()
+            
+            if not theme_df.empty:
+                # Sort by Change % to see the leaders at the top
+                theme_df = theme_df.sort_values('Change %', ascending=False)
+                
+                # Apply styling for a "Heatmap" feel
+                st.dataframe(
+                    theme_df[['Symbol', 'Price', 'Change %', 'RVOL']].style.background_gradient(
+                        cmap='RdYlGn', subset=['Change %']
+                    ).format({"Price": "${:,.2f}", "Change %": "{:+.2f}%", "RVOL": "{:.2f}x"}),
+                    hide_index=True, 
+                    use_container_width=True
+                )
+            else:
+                st.warning(f"No data for {theme}")
+
 st_autorefresh(interval=300000, key="global_refresh")
