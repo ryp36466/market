@@ -58,20 +58,22 @@ TRADING_THEMES = {
     "🥇 COMMODITIES/METALS": ["GC=F", "SLV", "AGQ", "ZSL", "ALB", "MP"]
 }
 
-# ────── FIXED: Single row per symbol (no duplicates ever) ──────
+# ────── FIXED: Single row per symbol (no duplicates) ──────
 symbol_to_label = {}
 for d in [GLOBAL_TICKERS, SECTOR_TICKERS, NEO_CLOUD_TICKERS, MAG7_TICKERS]:
     for label, sym in d.items():
-        if sym not in symbol_to_label:          # Best label wins
+        if sym not in symbol_to_label:
             symbol_to_label[sym] = label
 
-# Add any remaining theme symbols
 for sublist in TRADING_THEMES.values():
     for sym in sublist:
         if sym not in symbol_to_label:
             symbol_to_label[sym] = sym
 
 ALL_SYMBOLS = list(symbol_to_label.keys())
+
+# ────── NEW: Analyst Symbols = ALL stocks from Trading Themes (as requested) ──────
+ANALYST_SYMBOLS = sorted({sym for sublist in TRADING_THEMES.values() for sym in sublist})
 
 HUGE_CAP_SYMBOLS = {
     'WMT', 'BABA', 'DE', 'SO', 'NEM', 'BKNG', 'TXRH', 'RIO',
@@ -171,7 +173,7 @@ def get_tomorrows_earnings():
 
 @st.cache_data(ttl=900)
 def get_analyst_changes_yfinance(days_back=10):
-    symbols_to_check = list(HUGE_CAP_SYMBOLS)[:40]
+    symbols_to_check = ANALYST_SYMBOLS          # ← CHANGED: now uses ALL stocks from Trading Themes
     all_changes = []
     for symbol in symbols_to_check:
         try:
@@ -183,8 +185,13 @@ def get_analyst_changes_yfinance(days_back=10):
                 firm = row.get('Firm', 'Unknown')
                 if firm not in TIER1_FIRMS and 'Unknown' not in firm: continue
                 all_changes.append({
-                    "Date": idx.strftime('%Y-%m-%d'), "Symbol": symbol, "Firm": firm,
-                    "Action": row.get('Action', 'Change'), "From": row.get('From Grade', '—'), "To": row.get('To Grade', '—')
+                    "Date": idx.strftime('%Y-%m-%d'),
+                    "Symbol": symbol,
+                    "Asset": symbol_to_label.get(symbol, symbol),   # nicer name
+                    "Firm": firm,
+                    "Action": row.get('Action', 'Change'),
+                    "From": row.get('From Grade', '—'),
+                    "To": row.get('To Grade', '—')
                 })
         except:
             continue
@@ -394,7 +401,6 @@ with tab_gex:
                 
                 df_agg = (df_g.groupby('strike')['GEX'].sum() / 1e6).sort_index()
                 
-                # Gamma Flip Calculation
                 strikes = np.asarray(df_agg.index)
                 gex_vals = np.asarray(df_agg.values)
                 flip_level = spot
@@ -475,13 +481,22 @@ with tab_earnings:
 
 with tab_analyst:
     st.subheader("📊 Recent Analyst Changes")
+    st.caption(f"Scanning {len(ANALYST_SYMBOLS)} stocks from Trading Themes • Only Tier-1 firms")
     analyst_df = get_analyst_changes_yfinance()
     if not analyst_df.empty:
         def highlight_action(val):
-            if "Upgrade" in val: return 'background-color: #00cc66; color: black; font-weight: bold;'
-            if "Downgrade" in val: return 'background-color: #ff4d4d; color: white; font-weight: bold;'
+            if "Upgrade" in str(val): return 'background-color: #00cc66; color: black; font-weight: bold;'
+            if "Downgrade" in str(val): return 'background-color: #ff4d4d; color: white; font-weight: bold;'
             return ''
-        st.dataframe(analyst_df.style.applymap(highlight_action, subset=['Action']), hide_index=True, use_container_width=True)
+        st.dataframe(
+            analyst_df[['Date', 'Asset', 'Symbol', 'Firm', 'Action', 'From', 'To']]
+            .style.applymap(highlight_action, subset=['Action'])
+            .background_gradient(cmap='RdYlGn', subset=['Date']),
+            hide_index=True,
+            use_container_width=True
+        )
+    else:
+        st.info("No Tier-1 analyst changes in the last 10 days for the tracked theme stocks.")
 
 with tab_extremes:
     st.info("ATH/ATL scanner – coming soon")
