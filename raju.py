@@ -253,36 +253,30 @@ def get_theme_stock_news(max_stocks=30):
 
 # ────── NEW: Finviz Analyst Ratings (pure scraper - no extra packages) ──────
 @st.cache_data(ttl=3600)   # cache 1 hour - ratings don't change every minute
-def get_finviz_analyst_ratings():
+
+def get_marketbeat_ratings():
+    headers = {"User-Agent": "Mozilla/5.0"}
     ratings = []
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-    
-    for sym in ANALYST_SYMBOLS:
+    for sym in ANALYST_SYMBOLS[:40]:   # limit for speed
         try:
-            f_sym = "BTC" if sym == "BTC-USD" else sym.split("=")[0]
-            url = f"https://finviz.com/quote.ashx?t={f_sym.upper()}"
+            f_sym = sym.replace("^", "").replace("=F", "").upper()
+            url = f"https://www.marketbeat.com/stocks/nasdaq/{f_sym.lower()}/" if "NASDAQ" else f"https://www.marketbeat.com/stocks/nyse/{f_sym.lower()}/"
             r = requests.get(url, headers=headers, timeout=10)
             soup = BeautifulSoup(r.text, "html.parser")
             
-            # Analyst Recom
-            recom_tag = soup.find(string=lambda x: x and "Analyst Recom" in x)
-            rating_num = recom_tag.find_next("td").text.strip() if recom_tag else "—"
+            # Consensus Rating
+            consensus = soup.find(string=lambda x: x and "Consensus Rating" in x)
+            rating = consensus.find_next("td").text.strip() if consensus else "—"
             
-            # Target Price
-            target_tag = soup.find(string=lambda x: x and "Target Price" in x)
-            target_price = target_tag.find_next("td").text.strip().replace("$", "").strip() if target_tag else "—"
+            # Price Target
+            target = soup.find(string=lambda x: x and "Average Price Target" in x)
+            price_target = target.find_next("td").text.strip() if target else "—"
             
-            ratings.append({
-                "Asset": symbol_to_label.get(sym, sym),
-                "Symbol": sym,
-                "Rating": rating_num,
-                "Target Price": target_price
-            })
+            ratings.append({"Symbol": sym, "Consensus": rating, "Target": price_target})
         except:
             continue
-    
-    df = pd.DataFrame(ratings)
-    return df
+    return pd.DataFrame(ratings)
+
 
 
 def get_finviz_news_stable():
