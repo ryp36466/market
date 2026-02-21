@@ -58,14 +58,14 @@ TRADING_THEMES = {
     "🥇 COMMODITIES/METALS": ["GC=F", "SLV", "AGQ", "ZSL", "ALB", "MP"]
 }
 
-# ────── FIXED: Priority Label Mapping (NO MORE DUPLICATES) ──────
+# ────── FIXED: Single row per symbol (no duplicates ever) ──────
 symbol_to_label = {}
 for d in [GLOBAL_TICKERS, SECTOR_TICKERS, NEO_CLOUD_TICKERS, MAG7_TICKERS]:
     for label, sym in d.items():
-        if sym not in symbol_to_label:          # Best (nicest) label wins
+        if sym not in symbol_to_label:          # Best label wins
             symbol_to_label[sym] = label
 
-# Add any remaining theme symbols (fallback to ticker)
+# Add any remaining theme symbols
 for sublist in TRADING_THEMES.values():
     for sym in sublist:
         if sym not in symbol_to_label:
@@ -309,7 +309,7 @@ with tab_themes:
             if not theme_df.empty:
                 theme_df = theme_df.sort_values('Change %', ascending=False)
                 st.dataframe(
-                    theme_df[['Asset', 'Price', 'Change %', 'RVOL']]   # ← nicer display
+                    theme_df[['Asset', 'Price', 'Change %', 'RVOL']]
                     .style.background_gradient(cmap='RdYlGn', subset=['Change %'])
                     .format({"Price": "${:,.2f}", "Change %": "{:+.2f}%", "RVOL": "{:.2f}x"}),
                     hide_index=True,
@@ -318,7 +318,185 @@ with tab_themes:
             else:
                 st.warning(f"No data for {theme}")
 
-# (All other tabs — Relative Strength, GEX, Options, Earnings, Analyst, News — are unchanged from previous version)
-# Just copy the rest of the tabs from my previous reply if you need them (they are identical).
+with tab_rel_strength:
+    st.subheader("⚖️ Sector Strength vs SPY")
+    st.caption("5-Day Cumulative Performance normalized to 0%")
+    try:
+        benchmark = "SPY"
+        sector_symbols = list(SECTOR_TICKERS.values())
+        plot_df = hist_data['Close'][[benchmark] + sector_symbols].dropna()
+        normalized_df = (plot_df / plot_df.iloc[0] - 1) * 100
+        
+        fig = px.line(normalized_df.reset_index().melt(id_vars='Date', var_name='Ticker', value_name='Perf %'),
+                      x='Date', y='Perf %', color='Ticker', template="plotly_dark", height=500)
+        fig.update_traces(patch={"line": {"width": 4, "dash": "dot"}}, selector={"legendgroup": "SPY"})
+        st.plotly_chart(fig, use_container_width=True)
+        
+        st.write("### Alpha Delta (Current vs SPY)")
+        current_perf = normalized_df.iloc[-1]
+        rel_perf = (current_perf - current_perf[benchmark]).round(2).reset_index()
+        rel_perf.columns = ['Ticker', 'vs SPY (%)']
+        st.dataframe(rel_perf.sort_values('vs SPY (%)', ascending=False).style.background_gradient(cmap='RdYlGn'),
+                     hide_index=True, use_container_width=True)
+    except Exception as e: st.error(f"RS Error: {e}")
+
+    st.subheader("⚖️ Mag7 Strength vs QQQ")
+    st.caption("5-Day Cumulative Performance normalized to 0%")
+    try:
+        benchmark = "QQQ"
+        mag7_symbols = list(MAG7_TICKERS.values())
+        plot_df = hist_data['Close'][[benchmark] + mag7_symbols].dropna()
+        normalized_df = (plot_df / plot_df.iloc[0] - 1) * 100
+        
+        fig = px.line(normalized_df.reset_index().melt(id_vars='Date', var_name='Ticker', value_name='Perf %'),
+                      x='Date', y='Perf %', color='Ticker', template="plotly_dark", height=500)
+        fig.update_traces(patch={"line": {"width": 4, "dash": "dot"}}, selector={"legendgroup": "QQQ"})
+        st.plotly_chart(fig, use_container_width=True)
+        
+        st.write("### Alpha Delta (Current vs QQQ)")
+        current_perf = normalized_df.iloc[-1]
+        rel_perf = (current_perf - current_perf[benchmark]).round(2).reset_index()
+        rel_perf.columns = ['Ticker', 'vs QQQ (%)']
+        st.dataframe(rel_perf.sort_values('vs QQQ (%)', ascending=False).style.background_gradient(cmap='RdYlGn'),
+                     hide_index=True, use_container_width=True)
+    except Exception as e: st.error(f"Mag7 RS Error: {e}")
+
+with tab_gex:
+    st.subheader("📊 Gamma Exposure (GEX) + Gamma Flip Level")
+    st.caption("Front 3 expirations • Green = Long Gamma (stabilizing) • Red = Short Gamma (amplifying) • Yellow line = **Gamma Flip**")
+    
+    user_ticker = st.text_input("Enter Ticker for GEX Analysis", value="SPY").upper().strip()
+    
+    if user_ticker:
+        try:
+            tk = yf.Ticker(user_ticker)
+            options = tk.options
+            if not options:
+                st.warning("No options data found.")
+            else:
+                spot = round(tk.history(period="1d")['Close'].iloc[-1], 2)
+                
+                all_chains = []
+                for exp in options[:3]:
+                    ch = tk.option_chain(exp)
+                    all_chains.extend([
+                        ch.calls.assign(type='call', exp=exp),
+                        ch.puts.assign(type='put', exp=exp)
+                    ])
+                df_g = pd.concat(all_chains, ignore_index=True)
+                
+                df_g['dte'] = (pd.to_datetime(df_g['exp']).dt.tz_localize(None) - datetime.datetime.now()).dt.days / 365.0
+                df_g['GEX'] = calc_gamma_vectorized(
+                    spot, df_g['strike'].values, df_g['dte'].values,
+                    df_g['impliedVolatility'].values, 0.04, 0.01,
+                    df_g['type'].values, df_g['openInterest'].values
+                )
+                
+                df_agg = (df_g.groupby('strike')['GEX'].sum() / 1e6).sort_index()
+                
+                # Gamma Flip Calculation
+                strikes = np.asarray(df_agg.index)
+                gex_vals = np.asarray(df_agg.values)
+                flip_level = spot
+                for i in range(1, len(strikes)):
+                    if gex_vals[i-1] <= 0 and gex_vals[i] > 0:
+                        x1, y1 = strikes[i-1], gex_vals[i-1]
+                        x2, y2 = strikes[i], gex_vals[i]
+                        flip_level = x1 - y1 * (x2 - x1) / (y2 - y1)
+                        break
+                if abs(flip_level - spot) < 0.1 and np.any(gex_vals < 0):
+                    flip_level = strikes[gex_vals < 0][-1]
+                flip_level = round(flip_level)
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric(
+                        label="🔄 **Gamma Flip Level**",
+                        value=f"${flip_level:,}",
+                        delta=f"Spot is {((spot - flip_level)/flip_level*100):+.1f}% above flip"
+                    )
+                with col2:
+                    total_gex = round(df_agg.sum(), 1)
+                    st.metric(
+                        label="Net GEX",
+                        value=f"{total_gex}M",
+                        delta="🟢 Long Gamma (pinning likely)" if total_gex > 0 else "🔴 Short Gamma (volatile)"
+                    )
+                with col3:
+                    st.metric("Current Spot", f"${spot:,.2f}")
+                
+                st.caption("**Gamma Flip** = strike where net GEX changes from negative → positive. "
+                          "Above flip = dealers long gamma (dampens moves). Below = short gamma (amplifies moves). "
+                          "Key intraday level for day traders.")
+                
+                fig = go.Figure()
+                fig.add_trace(go.Bar(
+                    x=df_agg.index,
+                    y=df_agg.values,
+                    marker_color=['#00ff88' if x > 0 else '#ff4444' for x in df_agg.values],
+                    name="GEX ($M)"
+                ))
+                fig.add_vline(x=spot, line_dash="dash", line_color="white",
+                              annotation_text=f"Spot ${spot}", annotation_position="top")
+                fig.add_vline(x=flip_level, line_dash="dot", line_color="#ffd700", line_width=3,
+                              annotation_text=f"🔄 GAMMA FLIP ${flip_level}",
+                              annotation_position="bottom right" if flip_level < spot else "top left")
+                
+                fig.update_layout(
+                    template="plotly_dark",
+                    title=f"{user_ticker} Net Gamma Exposure + Gamma Flip Level",
+                    height=560,
+                    xaxis_title="Strike Price",
+                    yaxis_title="Gamma Exposure ($ Millions)",
+                    hovermode="x unified"
+                )
+                st.plotly_chart(fig, use_container_width=True)
+                
+        except Exception as e:
+            st.error(f"GEX Error: {e}")
+            st.info("Try SPY, QQQ, NVDA, TSLA — most liquid names work best.")
+
+with tab_options:
+    st.subheader("🐳 Put/Call Volume Ratio")
+    pcr_df = get_pcr_data()
+    if not pcr_df.empty:
+        st.dataframe(pcr_df.style.background_gradient(subset=['PCR'], cmap='RdYlGn_r'), hide_index=True, use_container_width=True)
+
+with tab_earnings:
+    st.subheader("🎯 Earnings Calendar")
+    all_events = get_yesterdays_earnings() + get_todays_earnings() + get_tomorrows_earnings()
+    if all_events:
+        df = pd.DataFrame(all_events)
+        def highlight_beats(val):
+            if val == "✅ Beat": return 'background-color: #00cc66; color: black; font-weight: bold;'
+            if val == "❌ Miss": return 'background-color: #ff4d4d; color: white; font-weight: bold;'
+            return ''
+        st.dataframe(df.style.applymap(highlight_beats, subset=['EPS Beat', 'Rev Beat']), hide_index=True, use_container_width=True)
+
+with tab_analyst:
+    st.subheader("📊 Recent Analyst Changes")
+    analyst_df = get_analyst_changes_yfinance()
+    if not analyst_df.empty:
+        def highlight_action(val):
+            if "Upgrade" in val: return 'background-color: #00cc66; color: black; font-weight: bold;'
+            if "Downgrade" in val: return 'background-color: #ff4d4d; color: white; font-weight: bold;'
+            return ''
+        st.dataframe(analyst_df.style.applymap(highlight_action, subset=['Action']), hide_index=True, use_container_width=True)
+
+with tab_extremes:
+    st.info("ATH/ATL scanner – coming soon")
+
+with tab_news:
+    st.subheader("📰 News Wire")
+    headlines = get_finviz_news_stable()
+    if headlines:
+        total_score = 0
+        for item in headlines:
+            label, score = get_sentiment_score(item.get('Title', ''))
+            total_score += score
+            with st.expander(f"{label} | {item.get('Title')}"):
+                st.write(f"Source: {item.get('Source')}")
+                st.write(f"[Link]({item.get('URL')})")
+        st.sidebar.metric("Sentiment Pulse", total_score, delta="Positive" if total_score >= 0 else "Negative")
 
 st_autorefresh(interval=300000, key="global_refresh")
