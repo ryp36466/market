@@ -58,7 +58,7 @@ TRADING_THEMES = {
     "🥇 COMMODITIES/METALS": ["GC=F", "SLV", "AGQ", "ZSL", "ALB", "MP"]
 }
 
-# ────── FIXED: Single row per symbol (no duplicates) ──────
+# ────── Single row per symbol (no duplicates) ──────
 symbol_to_label = {}
 for d in [GLOBAL_TICKERS, SECTOR_TICKERS, NEO_CLOUD_TICKERS, MAG7_TICKERS]:
     for label, sym in d.items():
@@ -72,7 +72,7 @@ for sublist in TRADING_THEMES.values():
 
 ALL_SYMBOLS = list(symbol_to_label.keys())
 
-# ────── NEW: Analyst Symbols = ALL stocks from Trading Themes (as requested) ──────
+# ────── Analyst + News Symbols (ALL Trading Themes stocks) ──────
 ANALYST_SYMBOLS = sorted({sym for sublist in TRADING_THEMES.values() for sym in sublist})
 
 HUGE_CAP_SYMBOLS = {
@@ -173,7 +173,7 @@ def get_tomorrows_earnings():
 
 @st.cache_data(ttl=900)
 def get_analyst_changes_yfinance(days_back=10):
-    symbols_to_check = ANALYST_SYMBOLS          # ← CHANGED: now uses ALL stocks from Trading Themes
+    symbols_to_check = ANALYST_SYMBOLS
     all_changes = []
     for symbol in symbols_to_check:
         try:
@@ -187,7 +187,7 @@ def get_analyst_changes_yfinance(days_back=10):
                 all_changes.append({
                     "Date": idx.strftime('%Y-%m-%d'),
                     "Symbol": symbol,
-                    "Asset": symbol_to_label.get(symbol, symbol),   # nicer name
+                    "Asset": symbol_to_label.get(symbol, symbol),
                     "Firm": firm,
                     "Action": row.get('Action', 'Change'),
                     "From": row.get('From Grade', '—'),
@@ -223,21 +223,44 @@ def get_pcr_data():
 
 
 def get_sentiment_score(text):
-    bull = ['upbeat','growth','surge','rally','beat','buy','bullish','expansion','profit','gain','positive','jump']
-    bear = ['slump','drop','fall','miss','sell','bearish','contraction','loss','negative','inflation','fear','risk','sink']
+    bull = ['upbeat','growth','surge','rally','beat','buy','bullish','expansion','profit','gain','positive','jump','beat','upgrade','raise','strong','outperform']
+    bear = ['slump','drop','fall','miss','sell','bearish','contraction','loss','negative','inflation','fear','risk','sink','downgrade','cut','weak','underperform']
     score = sum(1 for w in bull if w in text.lower()) - sum(1 for w in bear if w in text.lower())
-    if score > 0: return "🟢 Bullish", score
-    if score < 0: return "🔴 Bearish", score
+    if score > 2: return "🟢 Bullish", score
+    if score < -2: return "🔴 Bearish", score
+    if score > 0: return "🟡 Mild Bull", score
+    if score < 0: return "🟠 Mild Bear", score
     return "⚪ Neutral", 0
 
 
-def calc_gamma_vectorized(S, K, T, v, r, q, types, OI):
-    T = np.maximum(T, 1/365)
-    v = np.maximum(v, 0.01)
-    d1 = (np.log(S / K) + (r - q + 0.5 * v**2) * T) / (v * np.sqrt(T))
-    gamma = np.exp(-q * T) * norm.pdf(d1) / (S * v * np.sqrt(T))
-    val = (OI * 100) * (S**2) * 0.01 * gamma
-    return np.where(types == 'call', val, -val)
+# ────── NEW: Theme Stocks News (positive/negative icons) ──────
+@st.cache_data(ttl=180)
+def get_theme_stock_news(max_stocks=35):
+    news_items = []
+    for sym in ANALYST_SYMBOLS[:max_stocks]:
+        try:
+            tk = yf.Ticker(sym)
+            for n in tk.news[:5]:
+                title = n.get('title', '')
+                if not title: continue
+                url = n.get('link', '')
+                source = n.get('publisher', 'Yahoo')
+                label, score = get_sentiment_score(title)
+                news_items.append({
+                    "Asset": symbol_to_label.get(sym, sym),
+                    "Symbol": sym,
+                    "Title": title,
+                    "URL": url,
+                    "Source": source,
+                    "Sentiment": label,
+                    "Score": score
+                })
+        except:
+            continue
+    df = pd.DataFrame(news_items)
+    if not df.empty:
+        df = df.sort_values(by=['Score', 'Title'], ascending=[False, True]).drop_duplicates(subset=['Title'])
+    return df
 
 
 def get_finviz_news_stable():
@@ -261,6 +284,7 @@ def get_finviz_news_stable():
         except:
             return []
 
+
 # ────────────────────────────────────────────────
 #  MAIN UI
 # ────────────────────────────────────────────────
@@ -274,7 +298,7 @@ st.caption(f"EST {time_now} | Data as of {datetime.date.today()} | Day-Trader Ed
 tab_overview, tab_sectors, tab_themes, tab_rel_strength, tab_gex, tab_options, tab_earnings, tab_analyst, tab_extremes, tab_news = st.tabs([
     "📈 Market Overview", "🔥 Alpha Sectors", "🎯 Trading Themes", "⚖️ Relative Strength",
     "📊 GEX + Gamma Flip", "🐳 Options", "🎯 Earnings", "📊 Analyst Changes",
-    "🔥 ATH/ATL Plays", "📰 News Wire"
+    "🔥 ATH/ATL Plays", "📰 Theme News"
 ])
 
 with tab_overview:
@@ -501,17 +525,23 @@ with tab_analyst:
 with tab_extremes:
     st.info("ATH/ATL scanner – coming soon")
 
+# ────── UPDATED NEWS TAB: Only for Trading Themes stocks + Positive/Negative icons ──────
 with tab_news:
-    st.subheader("📰 News Wire")
-    headlines = get_finviz_news_stable()
-    if headlines:
-        total_score = 0
-        for item in headlines:
-            label, score = get_sentiment_score(item.get('Title', ''))
-            total_score += score
-            with st.expander(f"{label} | {item.get('Title')}"):
-                st.write(f"Source: {item.get('Source')}")
-                st.write(f"[Link]({item.get('URL')})")
-        st.sidebar.metric("Sentiment Pulse", total_score, delta="Positive" if total_score >= 0 else "Negative")
+    st.subheader("📰 Trading Themes News")
+    st.caption("Latest news from all stocks in your Trading Themes • Scored live for sentiment")
+    
+    news_df = get_theme_stock_news()
+    
+    if not news_df.empty:
+        total_score = news_df['Score'].sum()
+        st.sidebar.metric("Theme Sentiment Pulse", total_score,
+                         delta="Positive" if total_score >= 0 else "Negative")
+        
+        for _, row in news_df.iterrows():
+            with st.expander(f"{row['Sentiment']}  {row['Asset']} | {row['Title'][:90]}{'...' if len(row['Title']) > 90 else ''}"):
+                st.write(f"**Source:** {row['Source']}")
+                st.write(f"[🔗 Read full story]({row['URL']})")
+    else:
+        st.info("No news found at the moment. Refreshing soon...")
 
 st_autorefresh(interval=300000, key="global_refresh")
