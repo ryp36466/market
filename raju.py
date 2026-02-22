@@ -215,12 +215,15 @@ def get_sentiment_score(text):
     return "⚪ Neutral", 0
 
 
+# ────────────────────────────────────────────────
+#  IMPROVED GEX CALCULATION
+# ────────────────────────────────────────────────
 def calc_gamma_vectorized(S, K, T, v, r, q, types, OI):
-    T = np.maximum(T, 1/365)
+    T = np.maximum(T, 1/365.0)
     v = np.maximum(v, 0.01)
     d1 = (np.log(S / K) + (r - q + 0.5 * v**2) * T) / (v * np.sqrt(T))
     gamma = np.exp(-q * T) * norm.pdf(d1) / (S * v * np.sqrt(T))
-    val = (OI * 100) * (S**2) * 0.01 * gamma
+    val = gamma * OI * 100 * S
     return np.where(types == 'call', val, -val)
 
 
@@ -269,43 +272,52 @@ def get_theme_stock_news(max_stocks=30):
     return df
 
 
-@st.cache_data(ttl=3600)
-def get_marketbeat_ratings():
+# ────────────────────────────────────────────────
+#  NEW: RELIABLE YAHOO FINANCE ANALYST RATINGS (Replaces broken MarketBeat)
+# ────────────────────────────────────────────────
+@st.cache_data(ttl=1800)
+def get_analyst_ratings():
     ratings = []
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    rating_map = {
+        "strong_buy": ("🚀 Strong Buy", 5),
+        "buy": ("🟢 Buy", 4),
+        "hold": ("⚖️ Hold", 3),
+        "sell": ("🔴 Sell", 2),
+        "strong_sell": ("💥 Strong Sell", 1),
+    }
     
     for sym in ANALYST_SYMBOLS:
         try:
-            ticker = sym.replace("^", "").replace("=F", "").upper().lower()
-            for exchange in ["nasdaq", "nyse", "nyseamerican", "amex"]:
-                url = f"https://www.marketbeat.com/stocks/{exchange}/{ticker}/"
-                r = requests.get(url, headers=headers, timeout=12)
-                if r.status_code != 200: continue
-                
-                text = r.text
-                cons_match = re.search(r'Consensus Rating\s*([A-Za-z ]+)', text)
-                consensus = cons_match.group(1).strip() if cons_match else "—"
-                
-                target_match = re.search(r'(?:Average )?Price Target\s*\$?([\d,]+\.?\d*)', text)
-                target = target_match.group(1).replace(",", "") if target_match else "—"
-                
-                upside_match = re.search(r'Potential Upside/Downside\s*([+-]?\d+\.?\d*)%', text)
-                upside = upside_match.group(1) if upside_match else "—"
-                
-                if consensus != "—" or target != "—":
-                    ratings.append({
-                        "Asset": symbol_to_label.get(sym, sym),
-                        "Symbol": sym,
-                        "Consensus": consensus,
-                        "Target Price": target,
-                        "Upside %": upside
-                    })
-                    break
+            tk = yf.Ticker(sym)
+            info = tk.get_info()
+            
+            raw_key = info.get("recommendationKey", None)
+            display_name, bull_score = rating_map.get(raw_key, ("—", 0))
+            
+            target_mean = info.get("targetMeanPrice")
+            current = info.get("currentPrice")
+            target_high = info.get("targetHighPrice")
+            target_low = info.get("targetLowPrice")
+            analyst_count = info.get("numberOfAnalystOpinions", 0)
+            
+            upside = ((target_mean - current) / current * 100) if target_mean and current else None
+            
+            ratings.append({
+                "Asset": symbol_to_label.get(sym, sym),
+                "Symbol": sym,
+                "Consensus": display_name,
+                "Bull Score": bull_score,
+                "Target Mean": target_mean,
+                "Target High": target_high,
+                "Target Low": target_low,
+                "Current Price": current,
+                "Upside %": round(upside, 1) if upside is not None else None,
+                "Analyst Count": int(analyst_count)
+            })
         except:
             continue
     
-    df = pd.DataFrame(ratings)
-    return df
+    return pd.DataFrame(ratings)
 
 
 @st.cache_data(ttl=300)
@@ -343,7 +355,7 @@ st.caption(f"EST {time_now} | Data as of {datetime.date.today()} | Day-Trader Ed
 
 tab_overview, tab_sectors, tab_themes, tab_rel_strength, tab_gex, tab_options, tab_earnings, tab_analyst, tab_macro, tab_extremes, tab_news, tab_bias = st.tabs([
     "📈 Market Overview", "🔥 Alpha Sectors", "🎯 Trading Themes", "⚖️ Relative Strength",
-    "📊 GEX + Gamma Flip", "🐳 Options", "🎯 Earnings", "📊 Analyst Ratings (MarketBeat)",
+    "📊 GEX + Gamma Flip", "🐳 Options", "🎯 Earnings", "📊 Analyst Ratings (Yahoo)",
     "🌍 Macro News", "🔥 ATH/ATL Plays", "📰 Theme Stocks News", "🔍 Bias & Regime"
 ])
 
@@ -396,9 +408,6 @@ with tab_themes:
             else:
                 st.warning(f"No data for {theme}")
 
-# ────────────────────────────────────────────────
-#  FIXED RELATIVE STRENGTH TAB (BUG FIXED)
-# ────────────────────────────────────────────────
 with tab_rel_strength:
     st.subheader("⚖️ Sector Strength vs SPY")
     st.caption("5-Day Cumulative Performance normalized to 0%")
@@ -408,9 +417,8 @@ with tab_rel_strength:
         plot_df = hist_data['Close'][[benchmark] + sector_symbols].dropna(how='all')
         normalized_df = (plot_df / plot_df.iloc[0] - 1) * 100
         
-        # ROBUST DATE COLUMN FIX (this was causing the error)
         melt_df = normalized_df.reset_index()
-        date_col = melt_df.columns[0]                    # first column after reset_index() is always the date
+        date_col = melt_df.columns[0]
         melt_df = melt_df.rename(columns={date_col: 'Date'})
         
         fig = px.line(melt_df.melt(id_vars='Date', var_name='Ticker', value_name='Perf %'),
@@ -436,7 +444,6 @@ with tab_rel_strength:
         plot_df = hist_data['Close'][[benchmark] + mag7_symbols].dropna(how='all')
         normalized_df = (plot_df / plot_df.iloc[0] - 1) * 100
         
-        # ROBUST DATE COLUMN FIX
         melt_df = normalized_df.reset_index()
         date_col = melt_df.columns[0]
         melt_df = melt_df.rename(columns={date_col: 'Date'})
@@ -480,7 +487,15 @@ with tab_gex:
                     ])
                 df_g = pd.concat(all_chains, ignore_index=True)
                 
-                df_g['dte'] = (pd.to_datetime(df_g['exp']).dt.tz_localize(None) - datetime.datetime.now()).dt.days / 365.0
+                df_g['impliedVolatility'] = df_g['impliedVolatility'].fillna(0.01)
+                df_g['impliedVolatility'] = np.clip(df_g['impliedVolatility'], 0.01, 3.0)
+                df_g['openInterest'] = df_g['openInterest'].fillna(0)
+                
+                now = datetime.datetime.now(datetime.timezone.utc)
+                exp_datetime = pd.to_datetime(df_g['exp']).dt.tz_localize('UTC') + pd.Timedelta(hours=16)
+                df_g['dte'] = (exp_datetime - now).dt.total_seconds() / (365 * 24 * 3600)
+                df_g['dte'] = np.maximum(df_g['dte'], 1/365.0)
+                
                 df_g['GEX'] = calc_gamma_vectorized(
                     spot, df_g['strike'].values, df_g['dte'].values,
                     df_g['impliedVolatility'].values, 0.04, 0.01,
@@ -491,15 +506,14 @@ with tab_gex:
                 
                 strikes = np.asarray(df_agg.index)
                 gex_vals = np.asarray(df_agg.values)
+                
                 flip_level = spot
-                for i in range(1, len(strikes)):
-                    if gex_vals[i-1] <= 0 and gex_vals[i] > 0:
-                        x1, y1 = strikes[i-1], gex_vals[i-1]
-                        x2, y2 = strikes[i], gex_vals[i]
-                        flip_level = x1 - y1 * (x2 - x1) / (y2 - y1)
-                        break
-                if abs(flip_level - spot) < 0.1 and np.any(gex_vals < 0):
-                    flip_level = strikes[gex_vals < 0][-1]
+                sign_changes = np.where(np.sign(gex_vals[:-1]) != np.sign(gex_vals[1:]))[0]
+                if len(sign_changes) > 0:
+                    i = sign_changes[0]
+                    x1, y1 = strikes[i], gex_vals[i]
+                    x2, y2 = strikes[i+1], gex_vals[i+1]
+                    flip_level = x1 - y1 * (x2 - x1) / (y2 - y1) if y2 != y1 else x1
                 flip_level = round(flip_level)
                 
                 col1, col2, col3 = st.columns(3)
@@ -519,9 +533,8 @@ with tab_gex:
                 with col3:
                     st.metric("Current Spot", f"${spot:,.2f}")
                 
-                st.caption("**Gamma Flip** = strike where net GEX changes from negative → positive. "
-                          "Above flip = dealers long gamma (dampens moves). Below = short gamma (amplifies moves). "
-                          "Key intraday level for day traders.")
+                st.caption("**Gamma Flip** = first strike where net GEX changes sign. "
+                          "Above flip = dealers long gamma (dampens moves). Below = short gamma (amplifies moves).")
                 
                 fig = go.Figure()
                 fig.add_trace(go.Bar(
@@ -567,36 +580,50 @@ with tab_earnings:
             return ''
         st.dataframe(df.style.applymap(highlight_beats, subset=['EPS Beat', 'Rev Beat']), hide_index=True, use_container_width=True)
 
+# ────────────────────────────────────────────────
+#  FIXED + ENHANCED ANALYST RATINGS TAB (Yahoo Finance)
+# ────────────────────────────────────────────────
 with tab_analyst:
-    st.subheader("📊 Analyst Ratings & Price Targets (MarketBeat)")
-    st.caption("Live consensus from MarketBeat • Updated hourly")
+    st.subheader("📊 Analyst Ratings & Price Targets (Yahoo Finance)")
+    st.caption("Live consensus, targets & analyst count • Updated every 30 min • No scraping")
     
-    analyst_df = get_marketbeat_ratings()
+    analyst_df = get_analyst_ratings()
     
     if not analyst_df.empty:
-        price_map = market_df.set_index('Symbol')['Price'].to_dict()
-        analyst_df['Current Price'] = analyst_df['Symbol'].map(price_map)
-        
-        analyst_df['Target Price'] = pd.to_numeric(analyst_df['Target Price'], errors='coerce')
-        analyst_df['Current Price'] = pd.to_numeric(analyst_df['Current Price'], errors='coerce')
-        analyst_df['Upside %'] = ((analyst_df['Target Price'] - analyst_df['Current Price']) / analyst_df['Current Price'] * 100).round(1)
+        # Clean & sort
+        analyst_df = analyst_df.dropna(subset=['Bull Score']).sort_values('Bull Score', ascending=False)
         
         def rating_color(val):
-            if "Strong Buy" in str(val) or "Buy" in str(val): return 'background-color: #00cc66; color: black; font-weight: bold;'
-            if "Hold" in str(val): return 'background-color: #ffcc66; color: black;'
-            if "Sell" in str(val): return 'background-color: #ff6666; color: white;'
+            if "Strong Buy" in val or "Buy" in val: 
+                return 'background-color: #00cc66; color: black; font-weight: bold;'
+            if "Hold" in val: 
+                return 'background-color: #ffcc66; color: black;'
+            if "Sell" in val: 
+                return 'background-color: #ff6666; color: white; font-weight: bold;'
             return ''
         
         st.dataframe(
-            analyst_df[['Asset', 'Symbol', 'Consensus', 'Target Price', 'Current Price', 'Upside %']]
-            .style.applymap(rating_color, subset=['Consensus'])
-            .background_gradient(cmap='RdYlGn', subset=['Upside %'])
-            .format({"Target Price": "${:,.2f}", "Current Price": "${:,.2f}", "Upside %": "{:+.1f}%"}),
+            analyst_df[[
+                "Asset", "Symbol", "Consensus", "Bull Score", "Target Mean", 
+                "Target High", "Target Low", "Current Price", "Upside %", "Analyst Count"
+            ]]
+            .style
+            .applymap(rating_color, subset=['Consensus'])
+            .background_gradient(cmap='RdYlGn', subset=['Upside %', 'Bull Score'])
+            .format({
+                "Target Mean": "${:,.2f}",
+                "Target High": "${:,.2f}",
+                "Target Low": "${:,.2f}",
+                "Current Price": "${:,.2f}",
+                "Upside %": "{:+.1f}%"
+            }),
             hide_index=True,
             use_container_width=True
         )
+        
+        st.caption("**Target Range** shown as High / Low. **Bull Score** 5 = Strong Buy → 1 = Strong Sell")
     else:
-        st.info("Fetching latest analyst data from MarketBeat...")
+        st.info("Fetching latest analyst consensus from Yahoo Finance...")
 
 with tab_macro:
     st.subheader("🌍 Macro & Market-Moving News")
@@ -656,9 +683,6 @@ with tab_news:
     else:
         st.info("Fetching fresh news from Finviz...")
 
-# ────────────────────────────────────────────────
-#  BIAS & REGIME TAB
-# ────────────────────────────────────────────────
 with tab_bias:
     st.subheader("🔍 Market Bias & Gap Analysis")
     st.caption("Bullish / Bearish / Chop regime based on **today's price vs yesterday close** • Gap % = (open - yesterday close)")
