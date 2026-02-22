@@ -19,7 +19,7 @@ from scipy.stats import norm
 st.set_page_config(page_title="Alpha Terminal Pro", page_icon="🏛️", layout="wide")
 
 # ────────────────────────────────────────────────
-#  TICKER CONFIGS + TRADING THEMES (UPDATED)
+#  TICKER CONFIGS + TRADING THEMES
 # ────────────────────────────────────────────────
 GLOBAL_TICKERS = {
     "VIX": "^VIX",
@@ -91,7 +91,7 @@ HUGE_CAP_SYMBOLS = {
 FINNHUB_API_KEY = "d6au4n9r01qnr27itio0d6au4n9r01qnr27itiog"
 
 # ────────────────────────────────────────────────
-#  DATA HELPERS (UPDATED WITH GAP %)
+#  DATA HELPERS
 # ────────────────────────────────────────────────
 
 @st.cache_data(ttl=45)
@@ -106,7 +106,6 @@ def fetch_market_snapshot():
             price = intra['Close'][sym].dropna().iloc[-1]
             prev_close = hist_data['Close'][sym].iloc[-2]
             
-            # Gap % = (first available open price - yesterday close)
             open_series = intra['Open'][sym].dropna()
             today_open = open_series.iloc[0] if not open_series.empty else price
             gap_pct = ((today_open - prev_close) / prev_close * 100) if prev_close > 0 else 0.0
@@ -397,16 +396,24 @@ with tab_themes:
             else:
                 st.warning(f"No data for {theme}")
 
+# ────────────────────────────────────────────────
+#  FIXED RELATIVE STRENGTH TAB (BUG FIXED)
+# ────────────────────────────────────────────────
 with tab_rel_strength:
     st.subheader("⚖️ Sector Strength vs SPY")
     st.caption("5-Day Cumulative Performance normalized to 0%")
     try:
         benchmark = "SPY"
         sector_symbols = list(SECTOR_TICKERS.values())
-        plot_df = hist_data['Close'][[benchmark] + sector_symbols].dropna()
+        plot_df = hist_data['Close'][[benchmark] + sector_symbols].dropna(how='all')
         normalized_df = (plot_df / plot_df.iloc[0] - 1) * 100
         
-        fig = px.line(normalized_df.reset_index().melt(id_vars='Date', var_name='Ticker', value_name='Perf %'),
+        # ROBUST DATE COLUMN FIX (this was causing the error)
+        melt_df = normalized_df.reset_index()
+        date_col = melt_df.columns[0]                    # first column after reset_index() is always the date
+        melt_df = melt_df.rename(columns={date_col: 'Date'})
+        
+        fig = px.line(melt_df.melt(id_vars='Date', var_name='Ticker', value_name='Perf %'),
                       x='Date', y='Perf %', color='Ticker', template="plotly_dark", height=500)
         fig.update_traces(patch={"line": {"width": 4, "dash": "dot"}}, selector={"legendgroup": "SPY"})
         st.plotly_chart(fig, use_container_width=True)
@@ -417,17 +424,24 @@ with tab_rel_strength:
         rel_perf.columns = ['Ticker', 'vs SPY (%)']
         st.dataframe(rel_perf.sort_values('vs SPY (%)', ascending=False).style.background_gradient(cmap='RdYlGn'),
                      hide_index=True, use_container_width=True)
-    except Exception as e: st.error(f"RS Error: {e}")
+    except Exception as e: 
+        st.error(f"RS Error: {e}")
+        st.info("Data may still be loading — refresh in 5 seconds.")
 
     st.subheader("⚖️ Mag7 Strength vs QQQ")
     st.caption("5-Day Cumulative Performance normalized to 0%")
     try:
         benchmark = "QQQ"
         mag7_symbols = list(MAG7_TICKERS.values())
-        plot_df = hist_data['Close'][[benchmark] + mag7_symbols].dropna()
+        plot_df = hist_data['Close'][[benchmark] + mag7_symbols].dropna(how='all')
         normalized_df = (plot_df / plot_df.iloc[0] - 1) * 100
         
-        fig = px.line(normalized_df.reset_index().melt(id_vars='Date', var_name='Ticker', value_name='Perf %'),
+        # ROBUST DATE COLUMN FIX
+        melt_df = normalized_df.reset_index()
+        date_col = melt_df.columns[0]
+        melt_df = melt_df.rename(columns={date_col: 'Date'})
+        
+        fig = px.line(melt_df.melt(id_vars='Date', var_name='Ticker', value_name='Perf %'),
                       x='Date', y='Perf %', color='Ticker', template="plotly_dark", height=500)
         fig.update_traces(patch={"line": {"width": 4, "dash": "dot"}}, selector={"legendgroup": "QQQ"})
         st.plotly_chart(fig, use_container_width=True)
@@ -438,7 +452,9 @@ with tab_rel_strength:
         rel_perf.columns = ['Ticker', 'vs QQQ (%)']
         st.dataframe(rel_perf.sort_values('vs QQQ (%)', ascending=False).style.background_gradient(cmap='RdYlGn'),
                      hide_index=True, use_container_width=True)
-    except Exception as e: st.error(f"Mag7 RS Error: {e}")
+    except Exception as e: 
+        st.error(f"Mag7 RS Error: {e}")
+        st.info("Data may still be loading — refresh in 5 seconds.")
 
 with tab_gex:
     st.subheader("📊 Gamma Exposure (GEX) + Gamma Flip Level")
@@ -641,13 +657,12 @@ with tab_news:
         st.info("Fetching fresh news from Finviz...")
 
 # ────────────────────────────────────────────────
-#  NEW TAB: BIAS & REGIME FOR KEY INDICES + MAG 7
+#  BIAS & REGIME TAB
 # ────────────────────────────────────────────────
 with tab_bias:
     st.subheader("🔍 Market Bias & Gap Analysis")
     st.caption("Bullish / Bearish / Chop regime based on **today's price vs yesterday close** • Gap % = (open - yesterday close)")
 
-    # Combine Key Indices/Futures + Mag7
     key_assets = ["VIX", "ES (S&P 500 Fut)", "NQ (Nasdaq Fut)", "YM (Dow Fut)", 
                   "RTY (Russell 2000)", "SPY", "QQQ", "S&P 500"]
     bias_df = market_df[market_df['Asset'].isin(key_assets + list(MAG7_TICKERS.keys()))].copy()
