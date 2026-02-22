@@ -19,12 +19,19 @@ from scipy.stats import norm
 st.set_page_config(page_title="Alpha Terminal Pro", page_icon="🏛️", layout="wide")
 
 # ────────────────────────────────────────────────
-#  TICKER CONFIGS + TRADING THEMES
+#  TICKER CONFIGS + TRADING THEMES (UPDATED)
 # ────────────────────────────────────────────────
 GLOBAL_TICKERS = {
-    "S&P 500 (ES)": "ES=F", "Nasdaq (NQ)": "NQ=F", "Dow (YM)": "YM=F",
-    "SPY": "SPY", "QQQ": "QQQ", "VIX": "^VIX", "10Y Yield": "^TNX",
-    "DXY": "DX-Y.NYB", "S&P 500": "^GSPC"
+    "VIX": "^VIX",
+    "ES (S&P 500 Fut)": "ES=F",
+    "NQ (Nasdaq Fut)": "NQ=F",
+    "YM (Dow Fut)": "YM=F",
+    "RTY (Russell 2000)": "RTY=F",
+    "SPY": "SPY", 
+    "QQQ": "QQQ", 
+    "10Y Yield": "^TNX",
+    "DXY": "DX-Y.NYB", 
+    "S&P 500": "^GSPC"
 }
 
 SECTOR_TICKERS = {
@@ -84,7 +91,7 @@ HUGE_CAP_SYMBOLS = {
 FINNHUB_API_KEY = "d6au4n9r01qnr27itio0d6au4n9r01qnr27itiog"
 
 # ────────────────────────────────────────────────
-#  DATA HELPERS
+#  DATA HELPERS (UPDATED WITH GAP %)
 # ────────────────────────────────────────────────
 
 @st.cache_data(ttl=45)
@@ -98,11 +105,25 @@ def fetch_market_snapshot():
         try:
             price = intra['Close'][sym].dropna().iloc[-1]
             prev_close = hist_data['Close'][sym].iloc[-2]
+            
+            # Gap % = (first available open price - yesterday close)
+            open_series = intra['Open'][sym].dropna()
+            today_open = open_series.iloc[0] if not open_series.empty else price
+            gap_pct = ((today_open - prev_close) / prev_close * 100) if prev_close > 0 else 0.0
+            
             change = ((price - prev_close) / prev_close) * 100
             today_vol = intra['Volume'][sym].sum()
             avg_vol = hist_data['Volume'][sym].iloc[-5:-1].mean()
             rvol = today_vol / avg_vol if avg_vol > 0 else 1.0
-            rows.append({"Asset": label, "Symbol": sym, "Price": price, "Change %": change, "RVOL": rvol})
+            
+            rows.append({
+                "Asset": label, 
+                "Symbol": sym, 
+                "Price": price, 
+                "Gap %": gap_pct,
+                "Change %": change, 
+                "RVOL": rvol
+            })
         except:
             continue
     return pd.DataFrame(rows), intra, hist_data
@@ -321,16 +342,17 @@ time_now = datetime.datetime.now(est).strftime('%H:%M:%S')
 st.title("🏛️ Alpha Terminal Pro")
 st.caption(f"EST {time_now} | Data as of {datetime.date.today()} | Day-Trader Edition with Macro Pulse")
 
-tab_overview, tab_sectors, tab_themes, tab_rel_strength, tab_gex, tab_options, tab_earnings, tab_analyst, tab_macro, tab_extremes, tab_news = st.tabs([
+tab_overview, tab_sectors, tab_themes, tab_rel_strength, tab_gex, tab_options, tab_earnings, tab_analyst, tab_macro, tab_extremes, tab_news, tab_bias = st.tabs([
     "📈 Market Overview", "🔥 Alpha Sectors", "🎯 Trading Themes", "⚖️ Relative Strength",
     "📊 GEX + Gamma Flip", "🐳 Options", "🎯 Earnings", "📊 Analyst Ratings (MarketBeat)",
-    "🌍 Macro News", "🔥 ATH/ATL Plays", "📰 Theme Stocks News"
+    "🌍 Macro News", "🔥 ATH/ATL Plays", "📰 Theme Stocks News", "🔍 Bias & Regime"
 ])
 
 with tab_overview:
-    st.subheader("🗝️ Key Indices")
-    key_df = market_df[market_df['Asset'].isin(["S&P 500", "SPY", "QQQ"])][['Asset', 'Price', 'Change %', 'RVOL']].round(2)
-    st.dataframe(key_df.style.background_gradient(cmap='RdYlGn', subset=['Change %', 'RVOL']), hide_index=True, use_container_width=True)
+    st.subheader("🗝️ Key Indices & Futures")
+    key_assets = ["VIX", "ES (S&P 500 Fut)", "NQ (Nasdaq Fut)", "YM (Dow Fut)", "RTY (Russell 2000)", "SPY", "QQQ", "S&P 500"]
+    key_df = market_df[market_df['Asset'].isin(key_assets)][['Asset', 'Price', 'Gap %', 'Change %', 'RVOL']].round(2)
+    st.dataframe(key_df.style.background_gradient(cmap='RdYlGn', subset=['Change %', 'Gap %', 'RVOL']), hide_index=True, use_container_width=True)
 
     st.subheader("🚀 Magnificent 7")
     mag7_df = market_df[market_df['Asset'].isin(MAG7_TICKERS.keys())].copy().sort_values('Change %', ascending=False)
@@ -617,5 +639,47 @@ with tab_news:
                 st.write(f"[🔗 Read full story]({row['URL']})")
     else:
         st.info("Fetching fresh news from Finviz...")
+
+# ────────────────────────────────────────────────
+#  NEW TAB: BIAS & REGIME FOR KEY INDICES + MAG 7
+# ────────────────────────────────────────────────
+with tab_bias:
+    st.subheader("🔍 Market Bias & Gap Analysis")
+    st.caption("Bullish / Bearish / Chop regime based on **today's price vs yesterday close** • Gap % = (open - yesterday close)")
+
+    # Combine Key Indices/Futures + Mag7
+    key_assets = ["VIX", "ES (S&P 500 Fut)", "NQ (Nasdaq Fut)", "YM (Dow Fut)", 
+                  "RTY (Russell 2000)", "SPY", "QQQ", "S&P 500"]
+    bias_df = market_df[market_df['Asset'].isin(key_assets + list(MAG7_TICKERS.keys()))].copy()
+    
+    def get_bias(chg):
+        if chg >= 1.8:   return "🚀 Strong Bullish"
+        elif chg >= 0.6: return "🟢 Bullish"
+        elif chg >= -0.6:return "⚖️ Chop / Neutral"
+        elif chg >= -1.8:return "🔴 Bearish"
+        else:            return "💥 Strong Bearish"
+    
+    bias_df['Bias'] = bias_df['Change %'].apply(get_bias)
+    
+    def style_bias(val):
+        if "Strong Bullish" in val or "Bullish" in val:
+            return 'background-color: #00cc66; color: black; font-weight: bold'
+        if "Strong Bearish" in val or "Bearish" in val:
+            return 'background-color: #ff4444; color: white; font-weight: bold'
+        if "Chop" in val:
+            return 'background-color: #555555; color: white'
+        return ''
+    
+    st.dataframe(
+        bias_df[['Asset', 'Price', 'Gap %', 'Change %', 'Bias', 'RVOL']].round(2)
+        .style
+        .applymap(style_bias, subset=['Bias'])
+        .background_gradient(cmap='RdYlGn', subset=['Change %', 'Gap %'])
+        .format({"Gap %": "{:+.2f}%", "Change %": "{:+.2f}%", "RVOL": "{:.2f}x"}),
+        hide_index=True,
+        use_container_width=True
+    )
+    
+    st.info("**Regime Logic**: >1.8% = Strong Bull | 0.6–1.8% = Bull | ±0.6% = Chop | -1.8 to -0.6 = Bear | <-1.8% = Strong Bear")
 
 st_autorefresh(interval=300000, key="global_refresh")
