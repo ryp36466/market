@@ -34,72 +34,30 @@ BEAR_WORDS = {'slump', 'drop', 'fall', 'miss', 'sell', 'bearish', 'contraction',
               'cut', 'weak', 'underperform', 'lower', 'decline', 'plunge'}
 
 # ────────────────────────────────────────────────
-#  DATA STRUCTURES
+#  TICKER CONFIGURATIONS (Required for references)
 # ────────────────────────────────────────────────
-@dataclass
-class TickerConfig:
-    label: str
-    symbol: str
-    category: str
-
-class TickerRegistry:
-    def __init__(self):
-        self._symbols: Dict[str, str] = {}  # symbol -> label
-        self._configs: List[TickerConfig] = []
-        
-    def register(self, label: str, symbol: str, category: str = "general"):
-        if symbol not in self._symbols:
-            self._symbols[symbol] = label
-            self._configs.append(TickerConfig(label, symbol, category))
-    
-    def register_dict(self, d: Dict[str, str], category: str):
-        for label, symbol in d.items():
-            self.register(label, symbol, category)
-    
-    def register_themes(self, themes: Dict[str, List[str]]):
-        for category, symbols in themes.items():
-            for sym in symbols:
-                if sym not in self._symbols:
-                    self.register(sym, sym, category)
-    
-    def get_label(self, symbol: str) -> str:
-        return self._symbols.get(symbol, symbol)
-    
-    @property
-    def all_symbols(self) -> List[str]:
-        return list(self._symbols.keys())
-    
-    @property
-    def symbols_by_category(self) -> Dict[str, List[str]]:
-        result = {}
-        for cfg in self._configs:
-            result.setdefault(cfg.category, []).append(cfg.symbol)
-        return result
-
-# Initialize registry
-registry = TickerRegistry()
-registry.register_dict({
+GLOBAL_TICKERS = {
     "S&P 500 (ES)": "ES=F", "Nasdaq (NQ)": "NQ=F", "Dow (YM)": "YM=F",
     "SPY": "SPY", "QQQ": "QQQ", "VIX": "^VIX", "10Y Yield": "^TNX",
     "DXY": "DX-Y.NYB", "S&P 500": "^GSPC"
-}, "global")
+}
 
-registry.register_dict({
+SECTOR_TICKERS = {
     "Tech (XLK)": "XLK", "Software (IGV)": "IGV", "Semiconductor (SMH)": "SMH",
     "Financials (XLF)": "XLF", "Energy (XLE)": "XLE", "Healthcare (XLV)": "XLV",
     "Disc (XLY)": "XLY", "Indus (XLI)": "XLI", "Utils (XLU)": "XLU",
     "RE": "XLRE", "Staples (XLP)": "XLP", "Materials (XLB)": "XLB"
-}, "sector")
+}
 
-registry.register_dict({
+NEO_CLOUD_TICKERS = {
     "Nebius": "NBIS", "Vertiv": "VRT", "Arista": "ANET",
     "Supermicro": "SMCI", "Dell": "DELL", "Palantir": "PLTR"
-}, "neo_cloud")
+}
 
-registry.register_dict({
+MAG7_TICKERS = {
     "Apple": "AAPL", "MSFT": "MSFT", "Nvidia": "NVDA", "Amazon": "AMZN",
     "Google": "GOOGL", "Meta": "META", "Tesla": "TSLA"
-}, "mag7")
+}
 
 TRADING_THEMES = {
     "🔵 SEMICONDUCTORS": ["SMH", "SOXL", "NVDA", "AMD", "AVGO", "QCOM", "INTC", "MU", "MRVL", "TSM", "ARM", "SMCI", "WDC", "ALAB"],
@@ -115,7 +73,6 @@ TRADING_THEMES = {
     "🏥 HEALTHCARE": ["LLY", "UNH", "TEM"],
     "🥇 COMMODITIES/METALS": ["GC=F", "SLV", "AGQ", "ZSL", "ALB", "MP"]
 }
-registry.register_themes(TRADING_THEMES)
 
 ANALYST_SYMBOLS = sorted({sym for syms in TRADING_THEMES.values() for sym in syms})
 HUGE_CAP_SYMBOLS = {'WMT', 'BABA', 'DE', 'SO', 'NEM', 'BKNG', 'TXRH', 'RIO',
@@ -123,21 +80,32 @@ HUGE_CAP_SYMBOLS = {'WMT', 'BABA', 'DE', 'SO', 'NEM', 'BKNG', 'TXRH', 'RIO',
                    'T', 'VZ', 'XOM', 'CVX', 'JPM', 'BAC', 'WFC', 'PG', 'KO',
                    'HD', 'COST', 'NFLX', 'DIS', 'PFE', 'MRK', 'LLY', 'AVGO'}
 
+# Build symbol to label mapping
+symbol_to_label = {}
+for d in [GLOBAL_TICKERS, SECTOR_TICKERS, NEO_CLOUD_TICKERS, MAG7_TICKERS]:
+    for label, sym in d.items():
+        if sym not in symbol_to_label:
+            symbol_to_label[sym] = label
+
+for sublist in TRADING_THEMES.values():
+    for sym in sublist:
+        if sym not in symbol_to_label:
+            symbol_to_label[sym] = sym
+
+ALL_SYMBOLS = list(symbol_to_label.keys())
+
 # ────────────────────────────────────────────────
 #  CACHED DATA FETCHERS
 # ────────────────────────────────────────────────
 @st.cache_data(ttl=45)
 def fetch_market_snapshot() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Fetch market data with parallel downloads."""
-    symbols = registry.all_symbols
-    
     with st.spinner("Fetching market data..."):
-        # Download in parallel where possible
-        hist_data = yf.download(symbols, period="5d", interval="1d", progress=False, threads=True)
-        intra = yf.download(symbols, period="1d", interval="5m", prepost=True, progress=False, threads=True)
+        hist_data = yf.download(ALL_SYMBOLS, period="5d", interval="1d", progress=False, threads=True)
+        intra = yf.download(ALL_SYMBOLS, period="1d", interval="5m", prepost=True, progress=False, threads=True)
     
     rows = []
-    for sym in symbols:
+    for sym in ALL_SYMBOLS:
         try:
             price = intra['Close'][sym].dropna().iloc[-1]
             prev_close = hist_data['Close'][sym].iloc[-2]
@@ -146,7 +114,7 @@ def fetch_market_snapshot() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
             avg_vol = hist_data['Volume'][sym].iloc[-5:-1].mean()
             
             rows.append({
-                "Asset": registry.get_label(sym),
+                "Asset": symbol_to_label[sym],
                 "Symbol": sym,
                 "Price": price,
                 "Change %": change,
@@ -209,13 +177,10 @@ def get_earnings_for_day(offset: int = 0) -> List[Dict]:
 @st.cache_data(ttl=180)
 def get_pcr_data() -> pd.DataFrame:
     """Calculate Put/Call ratios efficiently."""
-    targets = {**{v: k for k, v in {
-        "AAPL": "AAPL", "MSFT": "MSFT", "NVDA": "NVDA", "AMZN": "AMZN",
-        "GOOGL": "Google", "META": "Meta", "TSLA": "Tesla"
-    }.items()}, "SPY": "SPY", "QQQ": "QQQ"}
+    targets = {**MAG7_TICKERS, "SPY": "SPY", "QQQ": "QQQ"}
     
     results = []
-    for symbol, label in targets.items():
+    for label, symbol in targets.items():
         try:
             tk = yf.Ticker(symbol)
             if not tk.options:
@@ -293,7 +258,7 @@ def get_theme_stock_news(max_stocks: int = 30) -> pd.DataFrame:
                 
                 label, score = get_sentiment_score(title)
                 items.append({
-                    "Asset": registry.get_label(sym),
+                    "Asset": symbol_to_label.get(sym, sym),
                     "Symbol": sym,
                     "Title": title,
                     "URL": link,
@@ -306,7 +271,6 @@ def get_theme_stock_news(max_stocks: int = 30) -> pd.DataFrame:
         except Exception:
             return []
     
-    # Use ThreadPoolExecutor for concurrent fetching
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
         futures = {executor.submit(fetch_single_news, sym): sym for sym in ANALYST_SYMBOLS[:max_stocks]}
         for future in concurrent.futures.as_completed(futures):
@@ -323,7 +287,6 @@ def get_marketbeat_ratings() -> pd.DataFrame:
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     ratings = []
     
-    # Pre-compile regex patterns
     patterns = {
         'consensus': re.compile(r'Consensus Rating\s*([A-Za-z ]+)'),
         'target': re.compile(r'(?:Average )?Price Target\s*\$?([\d,]+\.?\d*)'),
@@ -347,7 +310,7 @@ def get_marketbeat_ratings() -> pd.DataFrame:
                 
                 if consensus or target:
                     ratings.append({
-                        "Asset": registry.get_label(sym),
+                        "Asset": symbol_to_label.get(sym, sym),
                         "Symbol": sym,
                         "Consensus": consensus.group(1).strip() if consensus else "—",
                         "Target Price": target.group(1).replace(",", "") if target else "—",
@@ -374,11 +337,20 @@ def get_macro_news() -> List[Dict]:
             if not table:
                 return []
             
-            return [
-                {"Title": a.text.strip(), "URL": a["href"], "Source": "Finviz", "Date": cells[0].text.strip()}
-                for row in table.find_all("tr")[:25]
-                if len(cells := row.find_all("td")) == 2 and (a := cells[1].find("a", class_="tab-link-news"))
-            ]
+            news_list = []
+            for row in table.find_all("tr")[:25]:
+                cells = row.find_all("td")
+                if len(cells) != 2:
+                    continue
+                a = cells[1].find("a", class_="tab-link-news")
+                if a:
+                    news_list.append({
+                        "Title": a.text.strip(),
+                        "URL": a["href"],
+                        "Source": "Finviz",
+                        "Date": cells[0].text.strip()
+                    })
+            return news_list
         except Exception:
             return []
 
@@ -387,6 +359,10 @@ def get_macro_news() -> List[Dict]:
 # ────────────────────────────────────────────────
 def render_dataframe(df: pd.DataFrame, columns: List[str], sort_by: Optional[str] = None):
     """Helper to render styled dataframes consistently."""
+    if df.empty:
+        st.warning("No data available")
+        return
+    
     display_df = df[columns].copy()
     if sort_by and sort_by in display_df.columns:
         display_df = display_df.sort_values(sort_by, ascending=False)
@@ -401,17 +377,21 @@ def render_dataframe(df: pd.DataFrame, columns: List[str], sort_by: Optional[str
 def plot_relative_strength(hist_data: pd.DataFrame, benchmark: str, symbols: List[str], title: str):
     """Generate relative strength plot."""
     try:
-        plot_df = hist_data['Close'][[benchmark] + symbols].dropna()
+        available_symbols = [s for s in ([benchmark] + symbols) if s in hist_data.columns]
+        if len(available_symbols) < 2:
+            st.error(f"Insufficient data for {title}")
+            return
+            
+        plot_df = hist_data[available_symbols].dropna()
         normalized = (plot_df / plot_df.iloc[0] - 1) * 100
         
         fig = px.line(
             normalized.reset_index().melt(id_vars='Date', var_name='Ticker', value_name='Perf %'),
             x='Date', y='Perf %', color='Ticker', template="plotly_dark", height=500
         )
-        fig.update_traces(patch={"line": {"width": 4, "dash": "dot"}}, selector={"legendgroup": benchmark})
+        fig.update_traces(patch={"line": {"width": 4, "dash": "dot"}}, selector={"name": benchmark})
         st.plotly_chart(fig, use_container_width=True)
         
-        # Delta table
         current_perf = normalized.iloc[-1]
         delta = (current_perf - current_perf[benchmark]).round(2).reset_index()
         delta.columns = ['Ticker', f'vs {benchmark} (%)']
@@ -437,7 +417,6 @@ def render_gex_analysis():
         
         spot = round(tk.history(period="1d")['Close'].iloc[-1], 2)
         
-        # Fetch and process chains
         chains = []
         for exp in tk.options[:3]:
             chain = tk.option_chain(exp)
@@ -449,7 +428,6 @@ def render_gex_analysis():
         df_g = pd.concat(chains, ignore_index=True)
         df_g['dte'] = (pd.to_datetime(df_g['exp']).dt.tz_localize(None) - datetime.datetime.now()).dt.days / 365.0
         
-        # Calculate GEX
         df_g['GEX'] = calc_gamma_vectorized(
             spot, df_g['strike'].values, df_g['dte'].values,
             df_g['impliedVolatility'].values, 0.04, 0.01,
@@ -459,22 +437,22 @@ def render_gex_analysis():
         df_agg = (df_g.groupby('strike')['GEX'].sum() / 1e6).sort_index()
         strikes, gex_vals = df_agg.index.values, df_agg.values
         
-        # Find gamma flip
         flip_level = spot
         neg_mask = gex_vals < 0
-        if np.any(neg_mask) and np.any(~neg_mask):
-            # Find zero crossing
-            for i in range(1, len(strikes)):
-                if gex_vals[i-1] <= 0 < gex_vals[i]:
-                    x1, y1 = strikes[i-1], gex_vals[i-1]
-                    x2, y2 = strikes[i], gex_vals[i]
+        pos_mask = gex_vals > 0
+        
+        if np.any(neg_mask) and np.any(pos_mask):
+            zero_crossings = np.where(np.diff(np.sign(gex_vals)))[0]
+            if len(zero_crossings) > 0:
+                i = zero_crossings[0]
+                x1, y1 = strikes[i], gex_vals[i]
+                x2, y2 = strikes[i+1], gex_vals[i+1]
+                if y2 != y1:
                     flip_level = x1 - y1 * (x2 - x1) / (y2 - y1)
-                    break
         
         flip_level = round(flip_level)
         total_gex = round(df_agg.sum(), 1)
         
-        # Metrics
         c1, c2, c3 = st.columns(3)
         c1.metric("🔄 Gamma Flip Level", f"${flip_level:,}", 
                  f"{((spot - flip_level)/flip_level*100):+.1f}% vs spot")
@@ -482,7 +460,6 @@ def render_gex_analysis():
                  "🟢 Long Gamma" if total_gex > 0 else "🔴 Short Gamma")
         c3.metric("Current Spot", f"${spot:,.2f}")
         
-        # Chart
         fig = go.Figure()
         fig.add_trace(go.Bar(
             x=df_agg.index, y=df_agg.values,
@@ -522,7 +499,8 @@ def main():
         
         st.subheader("🚀 Magnificent 7")
         mag7_df = market_df[market_df['Symbol'].isin(list(MAG7_TICKERS.values()))].copy()
-        spy_change = market_df[market_df['Symbol'] == 'SPY']['Change %'].iloc[0] if not market_df[market_df['Symbol'] == 'SPY'].empty else 0
+        spy_row = market_df[market_df['Symbol'] == 'SPY']
+        spy_change = spy_row['Change %'].iloc[0] if not spy_row.empty else 0
         mag7_df['vs SPY (%)'] = (mag7_df['Change %'] - spy_change).round(2)
         render_dataframe(mag7_df, ['Asset', 'Price', 'Change %', 'vs SPY (%)', 'RVOL'], 'Change %')
     
@@ -551,10 +529,10 @@ def main():
     
     with tabs[3]:  # Relative Strength
         st.subheader("⚖️ Sector Strength vs SPY")
-        plot_relative_strength(hist_data, "SPY", list(SECTOR_TICKERS.values()), "Sectors vs SPY")
+        plot_relative_strength(hist_data['Close'], "SPY", list(SECTOR_TICKERS.values()), "Sectors vs SPY")
         
         st.subheader("⚖️ Mag7 Strength vs QQQ")
-        plot_relative_strength(hist_data, "QQQ", list(MAG7_TICKERS.values()), "Mag7 vs QQQ")
+        plot_relative_strength(hist_data['Close'], "QQQ", list(MAG7_TICKERS.values()), "Mag7 vs QQQ")
     
     with tabs[4]:  # GEX
         render_gex_analysis()
@@ -573,8 +551,11 @@ def main():
             df = pd.DataFrame(all_earnings)
             
             def highlight_beats(val):
-                color = '#00cc66' if val == "✅ Beat" else '#ff4d4d' if val == "❌ Miss" else ''
-                return f'background-color: {color}; font-weight: bold;' if color else ''
+                if val == "✅ Beat":
+                    return 'background-color: #00cc66; color: black; font-weight: bold;'
+                elif val == "❌ Miss":
+                    return 'background-color: #ff4d4d; color: white; font-weight: bold;'
+                return ''
             
             st.dataframe(df.style.applymap(highlight_beats, subset=['EPS Beat', 'Rev Beat']),
                         hide_index=True, use_container_width=True)
@@ -586,14 +567,18 @@ def main():
             price_map = market_df.set_index('Symbol')['Price'].to_dict()
             analyst_df['Current Price'] = analyst_df['Symbol'].map(price_map)
             analyst_df['Target Price'] = pd.to_numeric(analyst_df['Target Price'], errors='coerce')
+            analyst_df['Current Price'] = pd.to_numeric(analyst_df['Current Price'], errors='coerce')
             analyst_df['Upside %'] = ((analyst_df['Target Price'] - analyst_df['Current Price']) / 
                                      analyst_df['Current Price'] * 100).round(1)
             
             def rating_color(val):
                 val_str = str(val)
-                if "Buy" in val_str: return 'background-color: #00cc66; color: black; font-weight: bold;'
-                if "Hold" in val_str: return 'background-color: #ffcc66; color: black;'
-                if "Sell" in val_str: return 'background-color: #ff6666; color: white;'
+                if "Strong Buy" in val_str or "Buy" in val_str:
+                    return 'background-color: #00cc66; color: black; font-weight: bold;'
+                if "Hold" in val_str:
+                    return 'background-color: #ffcc66; color: black;'
+                if "Sell" in val_str:
+                    return 'background-color: #ff6666; color: white;'
                 return ''
             
             st.dataframe(
@@ -601,7 +586,8 @@ def main():
                 .style.applymap(rating_color, subset=['Consensus'])
                 .background_gradient(cmap='RdYlGn', subset=['Upside %'])
                 .format({"Target Price": "${:,.2f}", "Current Price": "${:,.2f}", "Upside %": "{:+.1f}%"}),
-                hide_index=True, use_container_width=True
+                hide_index=True,
+                use_container_width=True
             )
     
     with tabs[8]:  # Macro
@@ -617,7 +603,8 @@ def main():
                 for item in macro_news[:15]:
                     label, score = get_sentiment_score(item.get('Title', ''))
                     total_score += score
-                    with st.expander(f"{label} | {item.get('Title', '')[:85]}..."):
+                    title = item.get('Title', '')
+                    with st.expander(f"{label} | {title[:85]}{'...' if len(title) > 85 else ''}"):
                         st.write(f"**Source:** {item.get('Source')} | {item.get('Date')}")
                         st.write(f"[🔗 Read]({item.get('URL')})")
             
@@ -627,7 +614,8 @@ def main():
                 if trump_news:
                     for item in trump_news[:10]:
                         label, _ = get_sentiment_score(item.get('Title', ''))
-                        with st.expander(f"{label} | {item.get('Title', '')[:80]}..."):
+                        title = item.get('Title', '')
+                        with st.expander(f"{label} | {title[:80]}{'...' if len(title) > 80 else ''}"):
                             st.write(f"[🔗 Read]({item.get('URL')})")
                 else:
                     st.info("No major political headlines")
@@ -647,7 +635,8 @@ def main():
                             delta="Positive" if total_score >= 0 else "Negative")
             
             for _, row in news_df.iterrows():
-                with st.expander(f"{row['Sentiment']} {row['Asset']} | {row['Title'][:88]}... • {row['Time']}"):
+                title = row['Title']
+                with st.expander(f"{row['Sentiment']} {row['Asset']} | {title[:88]}{'...' if len(title) > 88 else ''} • {row['Time']}"):
                     st.write(f"[🔗 Read]({row['URL']})")
 
 if __name__ == "__main__":
