@@ -5,9 +5,7 @@ import numpy as np
 from streamlit_autorefresh import st_autorefresh
 import datetime
 import pytz
-import requests
 from scipy.stats import norm
-import plotly.express as px
 import plotly.graph_objects as go
 
 # ────────────────────────────────────────────────
@@ -16,7 +14,7 @@ import plotly.graph_objects as go
 st.set_page_config(page_title="Alpha Terminal Pro", page_icon="🏛️", layout="wide")
 
 # ────────────────────────────────────────────────
-# TICKERS
+# TICKER CONFIG
 # ────────────────────────────────────────────────
 GLOBAL_TICKERS = {
     "SPY": "SPY",
@@ -49,9 +47,7 @@ TRADING_THEMES = {
     "🟡 Mega Cap": ["AAPL", "MSFT", "NVDA", "AMZN"],
 }
 
-# ────────────────────────────────────────────────
-# SYMBOL BUILD
-# ────────────────────────────────────────────────
+# Build Symbol Map
 symbol_to_label = {}
 for d in [GLOBAL_TICKERS, SECTOR_TICKERS, MAG7_TICKERS]:
     for label, sym in d.items():
@@ -64,7 +60,7 @@ for lst in TRADING_THEMES.values():
 ALL_SYMBOLS = list(symbol_to_label.keys())
 
 # ────────────────────────────────────────────────
-# GLOBAL TICKER CACHE
+# TICKER CACHE
 # ────────────────────────────────────────────────
 @st.cache_resource
 def get_ticker_cache(symbols):
@@ -73,7 +69,7 @@ def get_ticker_cache(symbols):
 TICKER_CACHE = get_ticker_cache(ALL_SYMBOLS)
 
 # ────────────────────────────────────────────────
-# VECTOR GAMMA
+# VECTOR GAMMA CALCULATION
 # ────────────────────────────────────────────────
 def calc_gamma_vectorized(S, K, T, sigma, r, q, opt_type, OI):
 
@@ -123,9 +119,9 @@ def fetch_market_snapshot():
             rows.append({
                 "Asset": symbol_to_label[sym],
                 "Symbol": sym,
-                "Price": price,
-                "Change %": change,
-                "RVOL": rvol
+                "Price": round(price, 2),
+                "Change %": round(change, 2),
+                "RVOL": round(rvol, 2)
             })
         except:
             continue
@@ -164,7 +160,7 @@ def get_pcr_data():
     return pd.DataFrame(results)
 
 # ────────────────────────────────────────────────
-# UI
+# UI START
 # ────────────────────────────────────────────────
 market_df = fetch_market_snapshot()
 
@@ -172,7 +168,7 @@ est = pytz.timezone("US/Eastern")
 now = datetime.datetime.now(est).strftime("%H:%M:%S")
 
 st.title("🏛️ Alpha Terminal Pro")
-st.caption(f"EST {now} | Optimized Edition")
+st.caption(f"EST {now} | Gamma Flip Enabled")
 
 tabs = st.tabs([
     "📈 Overview",
@@ -186,37 +182,27 @@ tabs = st.tabs([
 # OVERVIEW
 # ────────────────────────────────────────────────
 with tabs[0]:
-
-    st.subheader("Key Indices")
-
     key_df = market_df[market_df["Symbol"].isin(["SPY", "QQQ", "^VIX"])]
-
     st.dataframe(key_df, use_container_width=True)
 
 # ────────────────────────────────────────────────
 # SECTORS
 # ────────────────────────────────────────────────
 with tabs[1]:
-
     sector_df = market_df[market_df["Symbol"].isin(SECTOR_TICKERS.values())]
-
     st.dataframe(sector_df, use_container_width=True)
 
 # ────────────────────────────────────────────────
 # THEMES
 # ────────────────────────────────────────────────
 with tabs[2]:
-
     for theme, tickers in TRADING_THEMES.items():
         st.markdown(f"### {theme}")
         df = market_df[market_df["Symbol"].isin(tickers)]
         st.dataframe(df.sort_values("Change %", ascending=False), use_container_width=True)
 
 # ────────────────────────────────────────────────
-# GEX TAB
-# ────────────────────────────────────────────────
-# ────────────────────────────────────────────────
-# GEX TAB (Enhanced with Flip + Color Logic)
+# GEX TAB (ENHANCED)
 # ────────────────────────────────────────────────
 with tabs[3]:
 
@@ -236,9 +222,8 @@ with tabs[3]:
 
             chains = []
 
-            for exp in options[:3]:  # Front 3 expirations
+            for exp in options[:3]:
                 chain = tk.option_chain(exp)
-
                 chains.append(chain.calls.assign(type="call", exp=exp))
                 chains.append(chain.puts.assign(type="put", exp=exp))
 
@@ -275,66 +260,31 @@ with tabs[3]:
                     break
 
             if flip_level is None:
-                flip_level = spot  # fallback
+                flip_level = spot
 
             flip_level = round(flip_level, 2)
-
             total_gex = agg.sum()
 
-            # ───── Metrics Row ─────
             col1, col2, col3 = st.columns(3)
+            col1.metric("Gamma Flip", f"${flip_level}")
+            col2.metric("Net GEX ($M)", f"{total_gex:,.1f}",
+                        delta="Long Gamma" if total_gex > 0 else "Short Gamma")
+            col3.metric("Spot", f"${spot:,.2f}")
 
-            with col1:
-                st.metric("Gamma Flip Level", f"${flip_level:,.2f}")
-
-            with col2:
-                st.metric(
-                    "Net GEX ($M)",
-                    f"{total_gex:,.1f}",
-                    delta="Long Gamma" if total_gex > 0 else "Short Gamma"
-                )
-
-            with col3:
-                st.metric("Spot Price", f"${spot:,.2f}")
-
-            # ───── Bar Colors ─────
             colors = ["#00ff88" if val > 0 else "#ff4d4d" for val in gex_vals]
 
-            # ───── Plot ─────
             fig = go.Figure()
+            fig.add_trace(go.Bar(x=strikes, y=gex_vals, marker_color=colors))
 
-            fig.add_trace(go.Bar(
-                x=strikes,
-                y=gex_vals,
-                marker_color=colors,
-                name="Gamma Exposure ($M)"
-            ))
-
-            # Spot Line
-            fig.add_vline(
-                x=spot,
-                line_dash="dash",
-                line_color="white",
-                annotation_text=f"Spot ${spot:.2f}",
-                annotation_position="top"
-            )
-
-            # Flip Line
-            fig.add_vline(
-                x=flip_level,
-                line_dash="dot",
-                line_color="yellow",
-                line_width=3,
-                annotation_text=f"Gamma Flip ${flip_level:.2f}",
-                annotation_position="bottom right"
-            )
+            fig.add_vline(x=spot, line_dash="dash", line_color="white")
+            fig.add_vline(x=flip_level, line_dash="dot", line_color="yellow", line_width=3)
 
             fig.update_layout(
                 template="plotly_dark",
                 height=600,
                 xaxis_title="Strike",
                 yaxis_title="Gamma Exposure ($ Millions)",
-                title=f"{ticker} Net Gamma Profile",
+                title=f"{ticker} Gamma Profile",
                 hovermode="x unified"
             )
 
@@ -342,13 +292,12 @@ with tabs[3]:
 
     except Exception as e:
         st.error(f"GEX Error: {e}")
+
 # ────────────────────────────────────────────────
 # OPTIONS TAB
 # ────────────────────────────────────────────────
 with tabs[4]:
-
     pcr_df = get_pcr_data()
-
     if not pcr_df.empty:
         st.dataframe(pcr_df, use_container_width=True)
 
