@@ -91,6 +91,42 @@ HUGE_CAP_SYMBOLS = {
 FINNHUB_API_KEY = "d6au4n9r01qnr27itio0d6au4n9r01qnr27itiog"
 
 # ────────────────────────────────────────────────
+#  HIGH-IMPACT NEWS FILTER (Professional Grade)
+# ────────────────────────────────────────────────
+HIGH_IMPACT_KEYWORDS = [
+    "earnings", "eps", "revenue", "guidance", "outlook", "beat", "miss", "raised", "cut", "lowered", "hike",
+    "upgrade", "downgrade", "price target", "pt raised", "pt cut",
+    "acquire", "acquisition", "merger", "buyout", "takeover", "deal", "partnership",
+    "sec", "doj", "lawsuit", "investigation", "probe", "settlement", "antitrust", "sued",
+    "fed", "inflation", "tariff", "sanctions", "regulation",
+    "surge", "plunge", "soar", "collapse", "spike", "jump", "tumble", "slump", "crash", "%"
+]
+
+LOW_IMPACT_KEYWORDS = [
+    "interview", "opinion", "watch", "preview", "recap", "morning brief", "analysis",
+    "blog", "commentary", "podcast", "video", "roundup", "exclusive"
+]
+
+def is_high_impact(title):
+    t = title.lower()
+    if any(kw in t for kw in LOW_IMPACT_KEYWORDS):
+        return False
+    if any(kw in t for kw in HIGH_IMPACT_KEYWORDS):
+        return True
+    return False
+
+def impact_score(title):
+    t = title.lower()
+    score = 0
+    if any(k in t for k in ["earnings", "eps", "revenue", "guidance"]): score += 5
+    if any(k in t for k in ["upgrade", "downgrade", "price target"]): score += 4
+    if any(k in t for k in ["acquisition", "merger", "buyout"]): score += 4
+    if any(k in t for k in ["lawsuit", "sec", "investigation"]): score += 4
+    if "%" in t: score += 3
+    if any(k in t for k in ["fed", "inflation", "tariff"]): score += 2
+    return score
+
+# ────────────────────────────────────────────────
 #  DATA HELPERS
 # ────────────────────────────────────────────────
 
@@ -215,9 +251,6 @@ def get_sentiment_score(text):
     return "⚪ Neutral", 0
 
 
-# ────────────────────────────────────────────────
-#  IMPROVED GEX CALCULATION
-# ────────────────────────────────────────────────
 def calc_gamma_vectorized(S, K, T, v, r, q, types, OI):
     T = np.maximum(T, 1/365.0)
     v = np.maximum(v, 0.01)
@@ -227,6 +260,9 @@ def calc_gamma_vectorized(S, K, T, v, r, q, types, OI):
     return np.where(types == 'call', val, -val)
 
 
+# ────────────────────────────────────────────────
+#  UPGRADED: HIGH-IMPACT THEME STOCK NEWS
+# ────────────────────────────────────────────────
 @st.cache_data(ttl=180)
 def get_theme_stock_news(max_stocks=30):
     news_items = []
@@ -241,18 +277,25 @@ def get_theme_stock_news(max_stocks=30):
             table = soup.find("table", class_="news-table")
             if not table: continue
             
-            for row in table.find_all("tr")[:6]:
+            for row in table.find_all("tr")[:8]:   # slightly more to compensate for aggressive filtering
                 tds = row.find_all("td")
                 if len(tds) < 2: continue
                 time_str = tds[0].text.strip()
                 a_tag = tds[1].find("a")
                 if not a_tag: continue
                 title = a_tag.text.strip()
-                if len(title) < 20: continue
+                if len(title) < 25: continue
+                
+                # === HIGH-IMPACT FILTER + SCORING ===
+                if not is_high_impact(title):
+                    continue
+                
                 link = a_tag.get("href")
                 if not link.startswith("http"): link = "https://finviz.com" + link
                 
-                label, score = get_sentiment_score(title)
+                label, sent_score = get_sentiment_score(title)
+                imp_score = impact_score(title)
+                
                 news_items.append({
                     "Asset": symbol_to_label.get(sym, sym),
                     "Symbol": sym,
@@ -260,7 +303,8 @@ def get_theme_stock_news(max_stocks=30):
                     "URL": link,
                     "Source": "Finviz",
                     "Sentiment": label,
-                    "Score": score,
+                    "Score": sent_score,
+                    "Impact": imp_score,
                     "Time": time_str
                 })
         except:
@@ -268,12 +312,74 @@ def get_theme_stock_news(max_stocks=30):
     
     df = pd.DataFrame(news_items)
     if not df.empty:
-        df = df.sort_values(by="Score", ascending=False).drop_duplicates(subset=["Title"])
+        df = df.sort_values(by=["Impact", "Score"], ascending=False).drop_duplicates(subset=["Title"])
     return df
 
 
+@st.cache_data(ttl=3600)
+def get_marketbeat_ratings():
+    ratings = []
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    
+    for sym in ANALYST_SYMBOLS:
+        try:
+            ticker = sym.replace("^", "").replace("=F", "").upper().lower()
+            for exchange in ["nasdaq", "nyse", "nyseamerican", "amex"]:
+                url = f"https://www.marketbeat.com/stocks/{exchange}/{ticker}/"
+                r = requests.get(url, headers=headers, timeout=12)
+                if r.status_code != 200: continue
+                
+                text = r.text
+                cons_match = re.search(r'Consensus Rating\s*([A-Za-z ]+)', text)
+                consensus = cons_match.group(1).strip() if cons_match else "—"
+                
+                target_match = re.search(r'(?:Average )?Price Target\s*\$?([\d,]+\.?\d*)', text)
+                target = target_match.group(1).replace(",", "") if target_match else "—"
+                
+                upside_match = re.search(r'Potential Upside/Downside\s*([+-]?\d+\.?\d*)%', text)
+                upside = upside_match.group(1) if upside_match else "—"
+                
+                if consensus != "—" or target != "—":
+                    ratings.append({
+                        "Asset": symbol_to_label.get(sym, sym),
+                        "Symbol": sym,
+                        "Consensus": consensus,
+                        "Target Price": target,
+                        "Upside %": upside
+                    })
+                    break
+        except:
+            continue
+    
+    df = pd.DataFrame(ratings)
+    return df
+
+
+@st.cache_data(ttl=300)
+def get_macro_news():
+    try:
+        return News().get_news()['news'].head(25).to_dict('records')
+    except:
+        try:
+            headers = {"User-Agent": "Mozilla/5.0"}
+            r = requests.get("https://finviz.com/news.ashx", headers=headers, timeout=10)
+            soup = BeautifulSoup(r.text, "html.parser")
+            table = soup.find("table", id="news-table")
+            if not table: return []
+            news_list = []
+            for row in table.find_all("tr")[:25]:
+                cells = row.find_all("td")
+                if len(cells) != 2: continue
+                a = cells[1].find("a", class_="tab-link-news")
+                if a:
+                    news_list.append({"Title": a.text.strip(), "URL": a["href"], "Source": "Finviz", "Date": cells[0].text.strip()})
+            return news_list
+        except:
+            return []
+
+
 # ────────────────────────────────────────────────
-#  NEW: RELIABLE YAHOO FINANCE ANALYST RATINGS (Replaces broken MarketBeat)
+#  RELIABLE YAHOO ANALYST RATINGS
 # ────────────────────────────────────────────────
 @st.cache_data(ttl=1800)
 def get_analyst_ratings():
@@ -320,29 +426,6 @@ def get_analyst_ratings():
     return pd.DataFrame(ratings)
 
 
-@st.cache_data(ttl=300)
-def get_macro_news():
-    try:
-        return News().get_news()['news'].head(25).to_dict('records')
-    except:
-        try:
-            headers = {"User-Agent": "Mozilla/5.0"}
-            r = requests.get("https://finviz.com/news.ashx", headers=headers, timeout=10)
-            soup = BeautifulSoup(r.text, "html.parser")
-            table = soup.find("table", id="news-table")
-            if not table: return []
-            news_list = []
-            for row in table.find_all("tr")[:25]:
-                cells = row.find_all("td")
-                if len(cells) != 2: continue
-                a = cells[1].find("a", class_="tab-link-news")
-                if a:
-                    news_list.append({"Title": a.text.strip(), "URL": a["href"], "Source": "Finviz", "Date": cells[0].text.strip()})
-            return news_list
-        except:
-            return []
-
-
 # ────────────────────────────────────────────────
 #  MAIN UI
 # ────────────────────────────────────────────────
@@ -356,8 +439,10 @@ st.caption(f"EST {time_now} | Data as of {datetime.date.today()} | Day-Trader Ed
 tab_overview, tab_sectors, tab_themes, tab_rel_strength, tab_gex, tab_options, tab_earnings, tab_analyst, tab_macro, tab_extremes, tab_news, tab_bias = st.tabs([
     "📈 Market Overview", "🔥 Alpha Sectors", "🎯 Trading Themes", "⚖️ Relative Strength",
     "📊 GEX + Gamma Flip", "🐳 Options", "🎯 Earnings", "📊 Analyst Ratings (Yahoo)",
-    "🌍 Macro News", "🔥 ATH/ATL Plays", "📰 Theme Stocks News", "🔍 Bias & Regime"
+    "🌍 Macro News", "🔥 ATH/ATL Plays", "📰 High-Impact News", "🔍 Bias & Regime"
 ])
+
+# (All other tabs - Overview, Sectors, Themes, Rel Strength, GEX, Options, Earnings, Analyst, Macro, Extremes, Bias - are unchanged from your previous working version)
 
 with tab_overview:
     st.subheader("🗝️ Key Indices & Futures")
@@ -580,9 +665,6 @@ with tab_earnings:
             return ''
         st.dataframe(df.style.applymap(highlight_beats, subset=['EPS Beat', 'Rev Beat']), hide_index=True, use_container_width=True)
 
-# ────────────────────────────────────────────────
-#  FIXED + ENHANCED ANALYST RATINGS TAB (Yahoo Finance)
-# ────────────────────────────────────────────────
 with tab_analyst:
     st.subheader("📊 Analyst Ratings & Price Targets (Yahoo Finance)")
     st.caption("Live consensus, targets & analyst count • Updated every 30 min • No scraping")
@@ -590,7 +672,6 @@ with tab_analyst:
     analyst_df = get_analyst_ratings()
     
     if not analyst_df.empty:
-        # Clean & sort
         analyst_df = analyst_df.dropna(subset=['Bull Score']).sort_values('Bull Score', ascending=False)
         
         def rating_color(val):
@@ -665,10 +746,13 @@ with tab_macro:
 with tab_extremes:
     st.info("ATH/ATL scanner – coming soon")
 
+# ────────────────────────────────────────────────
+#  HIGH-IMPACT NEWS TAB (Fully Upgraded)
+# ────────────────────────────────────────────────
 with tab_news:
-    st.subheader("📰 Theme Stocks News")
-    st.caption("Latest news from **all stocks in your Trading Themes** • Scored live for sentiment")
-    
+    st.subheader("📰 High-Impact Theme Stocks News")
+    st.caption("Filtered for **market-moving** events only • Earnings, Analyst Actions, M&A, Lawsuits, Major Moves • Sorted by real impact")
+
     news_df = get_theme_stock_news()
     
     if not news_df.empty:
@@ -677,11 +761,12 @@ with tab_news:
                          delta="Positive" if total_score >= 0 else "Negative")
         
         for _, row in news_df.iterrows():
-            with st.expander(f"{row['Sentiment']}  {row['Asset']} | {row['Title'][:88]}{'...' if len(row['Title']) > 88 else ''} • {row['Time']}"):
-                st.write(f"**Source:** {row['Source']}")
+            impact_emoji = "🔥" if row['Impact'] >= 5 else "⚡" if row['Impact'] >= 3 else "📈"
+            with st.expander(f"{impact_emoji} {row['Sentiment']} | {row['Asset']} | {row['Title'][:92]}{'...' if len(row['Title']) > 92 else ''} • {row['Time']}"):
+                st.write(f"**Source:** {row['Source']} | Impact Score: {row['Impact']}")
                 st.write(f"[🔗 Read full story]({row['URL']})")
     else:
-        st.info("Fetching fresh news from Finviz...")
+        st.info("Fetching high-impact news from Finviz...")
 
 with tab_bias:
     st.subheader("🔍 Market Bias & Gap Analysis")
