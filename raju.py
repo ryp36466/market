@@ -215,7 +215,12 @@ with tabs[2]:
 # ────────────────────────────────────────────────
 # GEX TAB
 # ────────────────────────────────────────────────
+# ────────────────────────────────────────────────
+# GEX TAB (Enhanced with Flip + Color Logic)
+# ────────────────────────────────────────────────
 with tabs[3]:
+
+    st.subheader("📊 Gamma Exposure + Gamma Flip")
 
     ticker = st.text_input("Ticker", value="SPY").upper()
 
@@ -223,13 +228,15 @@ with tabs[3]:
         tk = yf.Ticker(ticker)
         options = tk.options
 
-        if options:
+        if not options:
+            st.warning("No options data found.")
+        else:
 
             spot = tk.history(period="1d")["Close"].iloc[-1]
 
             chains = []
 
-            for exp in options[:3]:
+            for exp in options[:3]:  # Front 3 expirations
                 chain = tk.option_chain(exp)
 
                 chains.append(chain.calls.assign(type="call", exp=exp))
@@ -253,18 +260,88 @@ with tabs[3]:
             )
 
             agg = df.groupby("strike")["GEX"].sum() / 1e6
+            agg = agg.sort_index()
 
+            strikes = agg.index.values
+            gex_vals = agg.values
+
+            # ───── Gamma Flip Calculation ─────
+            flip_level = None
+            for i in range(1, len(gex_vals)):
+                if gex_vals[i-1] < 0 and gex_vals[i] > 0:
+                    x1, y1 = strikes[i-1], gex_vals[i-1]
+                    x2, y2 = strikes[i], gex_vals[i]
+                    flip_level = x1 - y1 * (x2 - x1) / (y2 - y1)
+                    break
+
+            if flip_level is None:
+                flip_level = spot  # fallback
+
+            flip_level = round(flip_level, 2)
+
+            total_gex = agg.sum()
+
+            # ───── Metrics Row ─────
+            col1, col2, col3 = st.columns(3)
+
+            with col1:
+                st.metric("Gamma Flip Level", f"${flip_level:,.2f}")
+
+            with col2:
+                st.metric(
+                    "Net GEX ($M)",
+                    f"{total_gex:,.1f}",
+                    delta="Long Gamma" if total_gex > 0 else "Short Gamma"
+                )
+
+            with col3:
+                st.metric("Spot Price", f"${spot:,.2f}")
+
+            # ───── Bar Colors ─────
+            colors = ["#00ff88" if val > 0 else "#ff4d4d" for val in gex_vals]
+
+            # ───── Plot ─────
             fig = go.Figure()
+
             fig.add_trace(go.Bar(
-                x=agg.index,
-                y=agg.values
+                x=strikes,
+                y=gex_vals,
+                marker_color=colors,
+                name="Gamma Exposure ($M)"
             ))
+
+            # Spot Line
+            fig.add_vline(
+                x=spot,
+                line_dash="dash",
+                line_color="white",
+                annotation_text=f"Spot ${spot:.2f}",
+                annotation_position="top"
+            )
+
+            # Flip Line
+            fig.add_vline(
+                x=flip_level,
+                line_dash="dot",
+                line_color="yellow",
+                line_width=3,
+                annotation_text=f"Gamma Flip ${flip_level:.2f}",
+                annotation_position="bottom right"
+            )
+
+            fig.update_layout(
+                template="plotly_dark",
+                height=600,
+                xaxis_title="Strike",
+                yaxis_title="Gamma Exposure ($ Millions)",
+                title=f"{ticker} Net Gamma Profile",
+                hovermode="x unified"
+            )
 
             st.plotly_chart(fig, use_container_width=True)
 
     except Exception as e:
-        st.error(e)
-
+        st.error(f"GEX Error: {e}")
 # ────────────────────────────────────────────────
 # OPTIONS TAB
 # ────────────────────────────────────────────────
