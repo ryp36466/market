@@ -249,6 +249,7 @@ def get_theme_stock_news(max_stocks=30):
     return df
 
 
+# ────── FIXED MarketBeat Scraper (updated regex for current page layout) ──────
 @st.cache_data(ttl=3600)
 def get_marketbeat_ratings():
     ratings = []
@@ -263,13 +264,15 @@ def get_marketbeat_ratings():
                 if r.status_code != 200: continue
                 
                 text = r.text
-                cons_match = re.search(r'Consensus Rating\s*([A-Za-z ]+)', text)
+                
+                # Updated regex for current MarketBeat layout
+                cons_match = re.search(r'Consensus Rating\s*\*\*([A-Za-z ]+)\*\*', text, re.IGNORECASE)
                 consensus = cons_match.group(1).strip() if cons_match else "—"
                 
-                target_match = re.search(r'(?:Average )?Price Target\s*\$?([\d,]+\.?\d*)', text)
+                target_match = re.search(r'(?:Average )?Price Target\s*\*\*\$?([\d,]+\.?\d*)\*\*', text, re.IGNORECASE)
                 target = target_match.group(1).replace(",", "") if target_match else "—"
                 
-                upside_match = re.search(r'Potential Upside/Downside\s*([+-]?\d+\.?\d*)%', text)
+                upside_match = re.search(r'Potential Upside/Downside\s*\*\*([+-]?\d+\.?\d*)%\*\*', text, re.IGNORECASE)
                 upside = upside_match.group(1) if upside_match else "—"
                 
                 if consensus != "—" or target != "—":
@@ -286,29 +289,6 @@ def get_marketbeat_ratings():
     
     df = pd.DataFrame(ratings)
     return df
-
-
-@st.cache_data(ttl=300)
-def get_macro_news():
-    try:
-        return News().get_news()['news'].head(25).to_dict('records')
-    except:
-        try:
-            headers = {"User-Agent": "Mozilla/5.0"}
-            r = requests.get("https://finviz.com/news.ashx", headers=headers, timeout=10)
-            soup = BeautifulSoup(r.text, "html.parser")
-            table = soup.find("table", id="news-table")
-            if not table: return []
-            news_list = []
-            for row in table.find_all("tr")[:25]:
-                cells = row.find_all("td")
-                if len(cells) != 2: continue
-                a = cells[1].find("a", class_="tab-link-news")
-                if a:
-                    news_list.append({"Title": a.text.strip(), "URL": a["href"], "Source": "Finviz", "Date": cells[0].text.strip()})
-            return news_list
-        except:
-            return []
 
 
 # ────────────────────────────────────────────────
@@ -558,7 +538,7 @@ with tab_analyst:
             use_container_width=True
         )
     else:
-        st.info("Fetching latest analyst data from MarketBeat...")
+        st.info("Fetching latest analyst data from MarketBeat... (should load in <10 seconds)")
 
 with tab_macro:
     st.subheader("🌍 Macro & Market-Moving News")
