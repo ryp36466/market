@@ -81,6 +81,9 @@ for sublist in TRADING_THEMES.values():
 ALL_SYMBOLS = list(symbol_to_label.keys())
 ANALYST_SYMBOLS = sorted({sym for sublist in TRADING_THEMES.values() for sym in sublist})
 
+# NEW: Dedicated hot list for Mag7 + SPY + QQQ
+MAG7_HOT_SYMBOLS = list(MAG7_TICKERS.values()) + ["SPY", "QQQ"]
+
 HUGE_CAP_SYMBOLS = {
     'WMT', 'BABA', 'DE', 'SO', 'NEM', 'BKNG', 'TXRH', 'RIO',
     'AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META', 'TSLA',
@@ -261,7 +264,7 @@ def calc_gamma_vectorized(S, K, T, v, r, q, types, OI):
 
 
 # ────────────────────────────────────────────────
-#  UPGRADED: HIGH-IMPACT THEME STOCK NEWS
+#  HIGH-IMPACT THEME STOCK NEWS
 # ────────────────────────────────────────────────
 @st.cache_data(ttl=180)
 def get_theme_stock_news(max_stocks=30):
@@ -277,7 +280,7 @@ def get_theme_stock_news(max_stocks=30):
             table = soup.find("table", class_="news-table")
             if not table: continue
             
-            for row in table.find_all("tr")[:8]:   # slightly more to compensate for aggressive filtering
+            for row in table.find_all("tr")[:8]:
                 tds = row.find_all("td")
                 if len(tds) < 2: continue
                 time_str = tds[0].text.strip()
@@ -286,7 +289,6 @@ def get_theme_stock_news(max_stocks=30):
                 title = a_tag.text.strip()
                 if len(title) < 25: continue
                 
-                # === HIGH-IMPACT FILTER + SCORING ===
                 if not is_high_impact(title):
                     continue
                 
@@ -316,42 +318,58 @@ def get_theme_stock_news(max_stocks=30):
     return df
 
 
-@st.cache_data(ttl=3600)
-def get_marketbeat_ratings():
-    ratings = []
+# ────────────────────────────────────────────────
+#  NEW: HIGH-IMPACT MAG7 + SPY + QQQ HOT NEWS
+# ────────────────────────────────────────────────
+@st.cache_data(ttl=180)
+def get_mag7_hot_news():
+    news_items = []
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     
-    for sym in ANALYST_SYMBOLS:
+    for sym in MAG7_HOT_SYMBOLS:
         try:
-            ticker = sym.replace("^", "").replace("=F", "").upper().lower()
-            for exchange in ["nasdaq", "nyse", "nyseamerican", "amex"]:
-                url = f"https://www.marketbeat.com/stocks/{exchange}/{ticker}/"
-                r = requests.get(url, headers=headers, timeout=12)
-                if r.status_code != 200: continue
+            f_sym = "BTC" if sym == "BTC-USD" else sym.split("=")[0]
+            url = f"https://finviz.com/quote.ashx?t={f_sym.upper()}"
+            r = requests.get(url, headers=headers, timeout=10)
+            soup = BeautifulSoup(r.text, "html.parser")
+            table = soup.find("table", class_="news-table")
+            if not table: continue
+            
+            for row in table.find_all("tr")[:10]:   # more rows because list is small
+                tds = row.find_all("td")
+                if len(tds) < 2: continue
+                time_str = tds[0].text.strip()
+                a_tag = tds[1].find("a")
+                if not a_tag: continue
+                title = a_tag.text.strip()
+                if len(title) < 25: continue
                 
-                text = r.text
-                cons_match = re.search(r'Consensus Rating\s*([A-Za-z ]+)', text)
-                consensus = cons_match.group(1).strip() if cons_match else "—"
+                if not is_high_impact(title):
+                    continue
                 
-                target_match = re.search(r'(?:Average )?Price Target\s*\$?([\d,]+\.?\d*)', text)
-                target = target_match.group(1).replace(",", "") if target_match else "—"
+                link = a_tag.get("href")
+                if not link.startswith("http"): link = "https://finviz.com" + link
                 
-                upside_match = re.search(r'Potential Upside/Downside\s*([+-]?\d+\.?\d*)%', text)
-                upside = upside_match.group(1) if upside_match else "—"
+                label, sent_score = get_sentiment_score(title)
+                imp_score = impact_score(title)
                 
-                if consensus != "—" or target != "—":
-                    ratings.append({
-                        "Asset": symbol_to_label.get(sym, sym),
-                        "Symbol": sym,
-                        "Consensus": consensus,
-                        "Target Price": target,
-                        "Upside %": upside
-                    })
-                    break
+                news_items.append({
+                    "Asset": symbol_to_label.get(sym, sym),
+                    "Symbol": sym,
+                    "Title": title,
+                    "URL": link,
+                    "Source": "Finviz",
+                    "Sentiment": label,
+                    "Score": sent_score,
+                    "Impact": imp_score,
+                    "Time": time_str
+                })
         except:
             continue
     
-    df = pd.DataFrame(ratings)
+    df = pd.DataFrame(news_items)
+    if not df.empty:
+        df = df.sort_values(by=["Impact", "Score"], ascending=False).drop_duplicates(subset=["Title"])
     return df
 
 
@@ -441,8 +459,6 @@ tab_overview, tab_sectors, tab_themes, tab_rel_strength, tab_gex, tab_options, t
     "📊 GEX + Gamma Flip", "🐳 Options", "🎯 Earnings", "📊 Analyst Ratings (Yahoo)",
     "🌍 Macro News", "🔥 ATH/ATL Plays", "📰 High-Impact News", "🔍 Bias & Regime"
 ])
-
-# (All other tabs - Overview, Sectors, Themes, Rel Strength, GEX, Options, Earnings, Analyst, Macro, Extremes, Bias - are unchanged from your previous working version)
 
 with tab_overview:
     st.subheader("🗝️ Key Indices & Futures")
@@ -747,11 +763,27 @@ with tab_extremes:
     st.info("ATH/ATL scanner – coming soon")
 
 # ────────────────────────────────────────────────
-#  HIGH-IMPACT NEWS TAB (Fully Upgraded)
+#  HIGH-IMPACT NEWS TAB (NOW WITH MAG7 + SPY + QQQ HOT NEWS)
 # ────────────────────────────────────────────────
 with tab_news:
+    st.subheader("🔥 Hot Mag7 + SPY/QQQ News")
+    st.caption("**Market-moving** news for the most important assets (AAPL, MSFT, NVDA, AMZN, GOOGL, META, TSLA, SPY, QQQ) • High-impact filter • Updated live")
+
+    hot_df = get_mag7_hot_news()
+    
+    if not hot_df.empty:
+        for _, row in hot_df.iterrows():
+            impact_emoji = "🔥" if row['Impact'] >= 5 else "⚡" if row['Impact'] >= 3 else "📈"
+            with st.expander(f"{impact_emoji} {row['Sentiment']} | {row['Asset']} | {row['Title'][:92]}{'...' if len(row['Title']) > 92 else ''} • {row['Time']}"):
+                st.write(f"**Source:** {row['Source']} | Impact Score: {row['Impact']}")
+                st.write(f"[🔗 Read full story]({row['URL']})")
+    else:
+        st.info("Fetching hot Mag7 + SPY/QQQ news from Finviz...")
+
+    st.markdown("---")
+
     st.subheader("📰 High-Impact Theme Stocks News")
-    st.caption("Filtered for **market-moving** events only • Earnings, Analyst Actions, M&A, Lawsuits, Major Moves • Sorted by real impact")
+    st.caption("Filtered for **market-moving** events across all trading themes • Earnings, Analyst Actions, M&A, Lawsuits, Major Moves")
 
     news_df = get_theme_stock_news()
     
@@ -766,7 +798,7 @@ with tab_news:
                 st.write(f"**Source:** {row['Source']} | Impact Score: {row['Impact']}")
                 st.write(f"[🔗 Read full story]({row['URL']})")
     else:
-        st.info("Fetching high-impact news from Finviz...")
+        st.info("Fetching high-impact theme news from Finviz...")
 
 with tab_bias:
     st.subheader("🔍 Market Bias & Gap Analysis")
