@@ -2,8 +2,10 @@ streamlit
 yfinance
 pandas
 numpy
-streamlit-autorefresh
-finvizfinance
-matplotlib
-scipy
+aiohttp
+requests
+beautifulsoup4
 plotly
+scipy
+streamlit-autorefresh
+pytz
