@@ -17,7 +17,6 @@ from scipy.stats import norm
 # ────────────────────────────────────────────────
 st.set_page_config(page_title="Alpha Terminal Pro", page_icon="🏛️", layout="wide")
 
-# Secure API Key Handling
 FINNHUB_KEY = st.secrets.get("FINNHUB_API_KEY", "d6au4n9r01qnr27itio0d6au4n9r01qnr27itiog")
 
 # ────────────────────────────────────────────────
@@ -44,17 +43,14 @@ TRADING_THEMES = {
 
 MAG7_TICKERS = ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA"]
 
-# Flattening for bulk processing
 symbol_to_label = {v: k for k, v in GLOBAL_TICKERS.items()}
 ALL_SYMBOLS = list(set(list(GLOBAL_TICKERS.values()) + list(SECTOR_ETFS.values()) + 
                        [s for t in TRADING_THEMES.values() for s in t] + MAG7_TICKERS))
 
 # ────────────────────────────────────────────────
-#  3. ASYNC DATA ENGINE (Maximum Performance)
+#  3. ASYNC DATA ENGINE
 # ────────────────────────────────────────────────
-
 async def fetch_quote(session, sym):
-    """Fetch live data via Finnhub Async."""
     f_sym = sym.replace('^', '').split('=')[0] if any(x in sym for x in ['^', '=']) else sym
     if sym == "DX-Y.NYB": f_sym = "DXY"
     url = f"https://finnhub.io/api/v1/quote?symbol={f_sym}&token={FINNHUB_KEY}"
@@ -71,11 +67,9 @@ async def get_all_quotes(symbols):
 
 @st.cache_data(ttl=12)
 def fetch_market_snapshot():
-    # Batch YFinance for Hist/Intra
     intra = yf.download(ALL_SYMBOLS, period="3d", interval="1m", prepost=True, progress=False)
     hist = yf.download(ALL_SYMBOLS, period="20d", interval="1d", progress=False)
     
-    # Run Async engine
     try:
         loop = asyncio.get_event_loop()
     except RuntimeError:
@@ -99,7 +93,6 @@ def fetch_market_snapshot():
             
             change = ((price - prev_close) / prev_close * 100)
             
-            # Gap & RVOL
             try:
                 today_open = intra['Open'][sym].loc[today_str].dropna().iloc[0]
                 gap = ((today_open - prev_close) / prev_close * 100)
@@ -116,11 +109,24 @@ def fetch_market_snapshot():
     return pd.DataFrame(rows), intra, hist
 
 # ────────────────────────────────────────────────
-#  4. THE MATH: GAMMA & SENTIMENT
+#  24-HOUR NEWS (YOUR REQUESTED ASYNC VERSION)
 # ────────────────────────────────────────────────
+async def fetch_news(session, sym):
+    to_date = datetime.datetime.now().strftime('%Y-%m-%d')
+    from_date = (datetime.datetime.now() - datetime.timedelta(days=1)).strftime('%Y-%m-%d')
+    url = f"https://finnhub.io/api/v1/company-news?symbol={sym}&from={from_date}&to={to_date}&token={FINNHUB_KEY}"
+    try:
+        async with session.get(url, timeout=5) as response:
+            if response.status == 200:
+                return await response.json()
+            return []
+    except:
+        return []
 
+# ────────────────────────────────────────────────
+#  MATH FUNCTIONS
+# ────────────────────────────────────────────────
 def get_gamma_exposure(S, K, T, v, r, q, types, OI):
-    """Calculates Gamma value per strike."""
     T = np.maximum(T, 1/365.0)
     v = np.maximum(v, 0.01)
     d1 = (np.log(S / K) + (r - q + 0.5 * v**2) * T) / (v * np.sqrt(T))
@@ -129,12 +135,15 @@ def get_gamma_exposure(S, K, T, v, r, q, types, OI):
     return np.where(types == 'call', val, -val)
 
 # ────────────────────────────────────────────────
-#  5. UI COMPONENTS: SIDEBAR & ALERTS
+#  FETCH DATA
 # ────────────────────────────────────────────────
-
 market_df, intra_data, hist_data = fetch_market_snapshot()
 
-if 'alert_log' not in st.session_state: st.session_state.alert_log = []
+# ────────────────────────────────────────────────
+#  ALERTS
+# ────────────────────────────────────────────────
+if 'alert_log' not in st.session_state: 
+    st.session_state.alert_log = []
 
 def process_alerts(df, intra):
     tz = pytz.timezone('US/Eastern')
@@ -145,24 +154,77 @@ def process_alerts(df, intra):
             if not any(msg in a for a in st.session_state.alert_log[:5]):
                 st.session_state.alert_log = [f"[{datetime.datetime.now(tz).strftime('%H:%M')}] 🔥 {msg}"] + st.session_state.alert_log[:10]
 
+# ────────────────────────────────────────────────
+#  UI
+# ────────────────────────────────────────────────
+st.title("🏛️ Alpha Terminal Pro")
+st.caption(f"Last Sync: {datetime.datetime.now(pytz.timezone('US/Eastern')).strftime('%H:%M:%S')} EST")
+
 with st.sidebar:
     st.header("🎰 LIVE ALERTS")
     process_alerts(market_df, intra_data)
     with st.container(height=300, border=True):
-        for a in st.session_state.alert_log: st.write(a)
-    if st.button("Clear Log"): st.session_state.alert_log = []; st.rerun()
+        for a in st.session_state.alert_log: 
+            st.write(a)
+    if st.button("Clear Log"): 
+        st.session_state.alert_log = []; st.rerun()
 
-# ────────────────────────────────────────────────
-#  6. MAIN DASHBOARD TABS
-# ────────────────────────────────────────────────
+tabs = st.tabs(["📰 24h News Feed", "📝 Battle Plan", "📊 Market Overview", "🎯 Themes", "⚖️ Alpha Delta", "📊 Gamma GEX", "💼 Portfolio"])
 
-tabs = st.tabs(["📝 Battle Plan", "📊 Market Overview", "🎯 Themes", "⚖️ Alpha Delta", "📊 Gamma GEX", "💼 Portfolio"])
-
+# ==================== NEW 24H NEWS TAB ====================
 with tabs[0]:
+    st.subheader("📰 Live Finnhub Feed (Last 24h)")
+    news_focus = st.multiselect("Filter by Ticker", options=ALL_SYMBOLS, default=["SPY", "NVDA", "TSLA", "BTC-USD", "SMH"])
+    
+    if st.button("🔄 Refresh News Feed", type="primary"):
+        with st.spinner("Scanning wires across all tickers..."):
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            
+            async def get_news_batch(symbols):
+                async with aiohttp.ClientSession() as session:
+                    tasks = [fetch_news(session, s) for s in symbols]
+                    return await asyncio.gather(*tasks)
+            
+            all_news_raw = loop.run_until_complete(get_news_batch(news_focus))
+            
+            processed_news = []
+            for news_list in all_news_raw:
+                for item in news_list:
+                    processed_news.append({
+                        "time": datetime.datetime.fromtimestamp(item['datetime']).strftime('%H:%M:%S'),
+                        "symbol": item.get('related', item.get('symbol', 'N/A')),
+                        "headline": item['headline'],
+                        "source": item['source'],
+                        "url": item['url'],
+                        "summary": item.get('summary', '')
+                    })
+            
+            if processed_news:
+                for article in sorted(processed_news, key=lambda x: x['time'], reverse=True)[:30]:
+                    with st.container(border=True):
+                        col_icon, col_txt = st.columns([1, 15])
+                        h_lower = article['headline'].lower()
+                        color = "#00FF00" if any(w in h_lower for w in ['surge','beat','buy','growth','up']) else "#FF4B4B" if any(w in h_lower for w in ['slump','miss','drop','cut','down']) else "white"
+                        
+                        col_icon.write("🗞️")
+                        with col_txt:
+                            st.markdown(f"**{article['symbol']}** | {article['time']} | *{article['source']}*")
+                            st.markdown(f"#### [{article['headline']}]({article['url']})")
+                            if article['summary']:
+                                with st.expander("Read Summary"):
+                                    st.write(article['summary'])
+            else:
+                st.info("No major headlines found in the last 24h for selected tickers.")
+
+# ==================== REST OF YOUR TABS ====================
+with tabs[1]:
     st.subheader("🕓 Premarket Battle Plan")
     es_chg = market_df[market_df['Symbol'] == 'ES=F']['Change %'].iloc[0] if 'ES=F' in market_df['Symbol'].values else 0
     nq_chg = market_df[market_df['Symbol'] == 'NQ=F']['Change %'].iloc[0] if 'NQ=F' in market_df['Symbol'].values else 0
-    
     col1, col2 = st.columns([2, 1])
     with col1:
         st.info(f"""
@@ -174,7 +236,7 @@ with tabs[0]:
         vix = market_df[market_df['Symbol'] == '^VIX']['Price'].iloc[0] if '^VIX' in market_df['Symbol'].values else 20
         st.metric("VIX Fear Index", f"{vix:.2f}", delta="Volatile" if vix > 20 else "Calm", delta_color="inverse")
 
-with tabs[1]:
+with tabs[2]:
     col_a, col_b = st.columns([2, 1])
     with col_a:
         st.write("**Key Indices**")
@@ -185,7 +247,7 @@ with tabs[1]:
         m7 = market_df[market_df['Symbol'].isin(MAG7_TICKERS)]
         st.dataframe(m7[['Symbol', 'Change %']].style.background_gradient(cmap='RdYlGn'), hide_index=True)
 
-with tabs[2]:
+with tabs[3]:
     theme_cols = st.columns(len(TRADING_THEMES))
     for i, (name, syms) in enumerate(TRADING_THEMES.items()):
         with theme_cols[i]:
@@ -193,7 +255,7 @@ with tabs[2]:
             t_df = market_df[market_df['Symbol'].isin(syms)]
             st.dataframe(t_df[['Symbol', 'Change %']].style.background_gradient(cmap='RdYlGn'), hide_index=True)
 
-with tabs[3]:
+with tabs[4]:
     st.subheader("Relative Strength vs SPY (Alpha Delta)")
     spy_chg = market_df[market_df['Symbol'] == 'SPY']['Change %'].iloc[0] if not market_df.empty else 0
     rs_df = market_df[market_df['Symbol'].isin([s for t in TRADING_THEMES.values() for s in t])].copy()
@@ -201,9 +263,8 @@ with tabs[3]:
     fig = px.bar(rs_df.sort_values('Alpha'), x='Symbol', y='Alpha', color='Alpha', color_continuous_scale='RdYlGn')
     st.plotly_chart(fig, use_container_width=True)
 
-with tabs[4]:
+with tabs[5]:
     st.subheader("Options Gamma Profile")
-    st.latex(r"\Gamma = \frac{e^{-qT} \phi(d_1)}{S \sigma \sqrt{T}}")
     target = st.text_input("Analyze Symbol", "SPY").upper()
     try:
         tk = yf.Ticker(target)
@@ -217,7 +278,7 @@ with tabs[4]:
         st.plotly_chart(fig_gex, use_container_width=True)
     except: st.error("No options data found.")
 
-with tabs[5]:
+with tabs[6]:
     st.subheader("💼 Paper Trading Simulator")
     if 'cash' not in st.session_state: st.session_state.cash = 100000.0
     if 'portfolio' not in st.session_state: st.session_state.portfolio = {}
@@ -240,5 +301,7 @@ with tabs[5]:
     if st.session_state.portfolio:
         st.write(st.session_state.portfolio)
 
-# Auto-Refresh Logic
+# ────────────────────────────────────────────────
+#  AUTO REFRESH
+# ────────────────────────────────────────────────
 st_autorefresh(interval=30000, key="data_refresh")
