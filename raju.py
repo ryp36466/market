@@ -7,21 +7,20 @@ import pytz
 import asyncio
 import aiohttp
 import requests
-from bs4 import BeautifulSoup
 from streamlit_autorefresh import st_autorefresh
 import plotly.express as px
 import plotly.graph_objects as go
 from scipy.stats import norm
 
 # ────────────────────────────────────────────────
-#  1. PAGE CONFIG & SECRETS
+#  PAGE CONFIG & SECRETS
 # ────────────────────────────────────────────────
 st.set_page_config(page_title="Alpha Terminal Pro", page_icon="🏛️", layout="wide")
 
 FINNHUB_KEY = st.secrets.get("FINNHUB_API_KEY", "d6au4n9r01qnr27itio0d6au4n9r01qnr27itiog")
 
 # ────────────────────────────────────────────────
-#  2. TICKER DEFINITIONS
+#  TICKERS
 # ────────────────────────────────────────────────
 GLOBAL_TICKERS = {
     "VIX": "^VIX", "ES Fut": "ES=F", "NQ Fut": "NQ=F", "RTY Fut": "RTY=F",
@@ -43,7 +42,7 @@ all_raw = list(GLOBAL_TICKERS.values()) + [s for t in TRADING_THEMES.values() fo
 ALL_SYMBOLS = sorted(list(set([s.upper() for s in all_raw])))
 
 # ────────────────────────────────────────────────
-#  3. ASYNC ENGINE
+#  ASYNC ENGINE
 # ────────────────────────────────────────────────
 async def fetch_async(session, url):
     try:
@@ -111,47 +110,29 @@ def get_sentiment_score(text):
     return "⚪ Neutral", 0
 
 # ────────────────────────────────────────────────
-#  FINVIZ 24-HOUR NEWS (STOCK SPECIFIC + TIME FILTER)
+#  YAHOO FINANCE 24-HOUR NEWS (NEW)
 # ────────────────────────────────────────────────
 @st.cache_data(ttl=180)
-def get_finviz_news_24h():
+def get_yahoo_news_24h():
     news = []
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-    now_est = datetime.datetime.now(pytz.timezone('US/Eastern'))
+    now = datetime.datetime.now(pytz.timezone('US/Eastern'))
+    cutoff = now - datetime.timedelta(hours=24)
 
-    for sym in ALL_SYMBOLS[:25]:   # limit to avoid too many requests
+    for sym in ALL_SYMBOLS[:25]:   # limit for speed
         try:
-            url = f"https://finviz.com/quote.ashx?t={sym}"
-            r = requests.get(url, headers=headers, timeout=8)
-            soup = BeautifulSoup(r.text, "html.parser")
-            table = soup.find("table", class_="news-table")
-            if not table: continue
-
-            for row in table.find_all("tr")[:10]:
-                tds = row.find_all("td")
-                if len(tds) < 2: continue
-                time_str = tds[0].text.strip()
-                a = tds[1].find("a")
-                if not a: continue
-                title = a.text.strip()
-                link = a.get("href")
-                if not link.startswith("http"): link = "https://finviz.com" + link
-
-                # Parse Finviz time and filter last 24 hours
-                try:
-                    if 'ago' in time_str:
-                        hours = int(time_str.split('h')[0].strip())
-                        parsed = now_est - datetime.timedelta(hours=hours)
-                    elif 'Yesterday' in time_str:
-                        parsed = now_est - datetime.timedelta(days=1)
-                    else:
-                        dt = datetime.datetime.strptime(time_str, '%I:%M %p')
-                        parsed = now_est.replace(hour=dt.hour, minute=dt.minute, second=0, microsecond=0)
-                    
-                    if (now_est - parsed).total_seconds() / 3600 > 24:
-                        continue  # skip older than 24h
-                except:
-                    continue
+            tk = yf.Ticker(sym)
+            items = tk.news  # Yahoo Finance news list
+            for item in items:
+                pub_time = datetime.datetime.fromtimestamp(item['providerPublishTime'], tz=pytz.UTC)
+                pub_time_est = pub_time.astimezone(pytz.timezone('US/Eastern'))
+                
+                if pub_time_est < cutoff:
+                    continue  # skip older than 24h
+                
+                title = item.get('title', '')
+                link = item.get('link', '')
+                publisher = item.get('publisher', 'Yahoo Finance')
+                time_str = pub_time_est.strftime('%H:%M')
 
                 label, score = get_sentiment_score(title)
                 
@@ -160,6 +141,7 @@ def get_finviz_news_24h():
                     "Title": title,
                     "URL": link,
                     "Time": time_str,
+                    "Publisher": publisher,
                     "Sentiment": label,
                     "Score": score
                 })
@@ -168,7 +150,7 @@ def get_finviz_news_24h():
 
     df = pd.DataFrame(news)
     if not df.empty:
-        df = df.sort_values("Score", ascending=False).drop_duplicates("Title").head(50)
+        df = df.sort_values("Score", ascending=False).drop_duplicates("Title").head(60)
     return df
 
 # ────────────────────────────────────────────────
@@ -176,11 +158,14 @@ def get_finviz_news_24h():
 # ────────────────────────────────────────────────
 news_focus = ["SPY", "NVDA", "TSLA", "BTC-USD", "SMH", "QQQ"]
 market_df, raw_news = fetch_terminal_data(news_focus)
-finviz_news_df = get_finviz_news_24h()
+yahoo_news_df = get_yahoo_news_24h()
 
 # ────────────────────────────────────────────────
-#  SIDEBAR
+#  UI
 # ────────────────────────────────────────────────
+st.title("🏛️ Alpha Terminal Pro")
+st.caption(f"Last Sync: {datetime.datetime.now(pytz.timezone('US/Eastern')).strftime('%H:%M:%S')} EST")
+
 with st.sidebar:
     st.header("⚙️ Settings")
     news_focus = st.multiselect("Finnhub News Focus", options=ALL_SYMBOLS, default=news_focus)
@@ -190,25 +175,9 @@ with st.sidebar:
         st.rerun()
 
 # ────────────────────────────────────────────────
-#  UI
+#  TABS
 # ────────────────────────────────────────────────
-st.title("🏛️ Alpha Terminal Pro")
-
-# Top Stats (kept from your code)
-with st.container(border=True):
-    c1, c2, c3 = st.columns([2, 1, 1])
-    spy_chg = market_df[market_df['Symbol'] == 'SPY']['Change %'].values[0] if 'SPY' in market_df['Symbol'].values else 0
-    with c1:
-        st.subheader("📝 Morning Battle Plan")
-        bias = "🚀 Risk-On" if spy_chg > 0.4 else "📉 Risk-Off" if spy_chg < -0.4 else "⚖️ Neutral"
-        st.markdown(f"**Bias:** {bias}")
-    with c2:
-        vix = market_df[market_df['Symbol'] == '^VIX']['Price'].values[0] if '^VIX' in market_df['Symbol'].values else 20
-        st.metric("VIX", f"{vix:.2f}")
-    with c3:
-        st.metric("S&P 500", f"{spy_chg}%")
-
-tabs = st.tabs(["📊 Overview", "🎯 Themes", "⚖️ Alpha Delta", "📰 Finnhub News", "📰 Finviz 24h News", "📊 GEX", "💼 Portfolio"])
+tabs = st.tabs(["📊 Overview", "🎯 Themes", "⚖️ Alpha Delta", "📰 Finnhub News", "📰 Yahoo 24h News", "📊 GEX", "💼 Portfolio"])
 
 with tabs[0]:
     st.dataframe(market_df[market_df['Symbol'].isin(GLOBAL_TICKERS.values())].style.background_gradient(cmap='RdYlGn', subset=['Change %']), hide_index=True, use_container_width=True)
@@ -222,7 +191,7 @@ with tabs[1]:
             st.dataframe(theme_view.style.background_gradient(cmap='RdYlGn'), hide_index=True)
 
 with tabs[2]:
-    market_df['Alpha'] = market_df['Change %'] - spy_chg
+    market_df['Alpha'] = market_df['Change %'] - (market_df[market_df['Symbol'] == 'SPY']['Change %'].values[0] if 'SPY' in market_df['Symbol'].values else 0)
     fig_rs = px.bar(market_df[market_df['Symbol'].isin([s for t in TRADING_THEMES.values() for s in t])].sort_values('Alpha'), 
                     x='Symbol', y='Alpha', color='Alpha', color_continuous_scale='RdYlGn', title="Relative Strength vs SPY")
     st.plotly_chart(fig_rs, use_container_width=True)
@@ -240,15 +209,17 @@ with tabs[3]:
                 st.markdown(f"#### [{item['headline']}]({item['url']})")
 
 with tabs[4]:
-    st.subheader("📰 Finviz 24-Hour News Sentiment")
+    st.subheader("📰 Yahoo Finance 24-Hour News Sentiment")
     st.caption("Stock-specific • Only news from the last 24 hours • Sorted by strongest sentiment")
-    if not finviz_news_df.empty:
-        for _, row in finviz_news_df.iterrows():
+    
+    if not yahoo_news_df.empty:
+        for _, row in yahoo_news_df.iterrows():
             emoji = "🟢" if "Bull" in row['Sentiment'] else "🔴" if "Bear" in row['Sentiment'] else "⚪"
             with st.expander(f"{emoji} {row['Sentiment']} | {row['Asset']} | {row['Title'][:92]}{'...' if len(row['Title']) > 92 else ''} • {row['Time']}"):
+                st.write(f"**Publisher:** {row['Publisher']}")
                 st.write(f"[🔗 Read full story]({row['URL']})")
     else:
-        st.info("No news in last 24 hours or still loading...")
+        st.info("Fetching latest Yahoo Finance news...")
 
 with tabs[5]:
     st.subheader("Options Gamma Profile")
