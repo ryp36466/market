@@ -130,53 +130,81 @@ def impact_score(title):
     return score
 
 # ────────────────────────────────────────────────
-#  FIXED DATA HELPERS - WORKS AT 4AM PRE-MARKET
+#  FIXED DATA HELPERS - NOW RELIABLY LIVE DURING MARKET HOURS
 # ────────────────────────────────────────────────
 
-@st.cache_data(ttl=20)
+@st.cache_data(ttl=10)
 def fetch_market_snapshot():
-    """Fixed version that reliably shows live pre-market prices, change%, gap% from 4:00 AM ET"""
-    hist_data = yf.download(ALL_SYMBOLS, period="10d", interval="1d", progress=False)
-    intra = yf.download(ALL_SYMBOLS, period="2d", interval="5m", prepost=True, progress=False)
+    """FIXED: Uses Finnhub real-time quotes (fastest live) + yfinance 1m intraday fallback.
+    This solves the non-updating price issue in live/pre/post market."""
+    intra = yf.download(ALL_SYMBOLS, period="3d", interval="1m", prepost=True, progress=False, threads=True)
+    hist_data = yf.download(ALL_SYMBOLS, period="15d", interval="1d", progress=False)
     
     rows = []
+    tz = pytz.timezone('US/Eastern')
+    now_est = datetime.datetime.now(tz)
+    today_str = now_est.strftime('%Y-%m-%d')
+
     for sym in ALL_SYMBOLS:
         label = symbol_to_label.get(sym, sym)
         try:
-            tk = yf.Ticker(sym)
-            fast = tk.fast_info
-            
-            # Reliable pre-market / regular price
-            price = fast.get('lastPrice') or fast.get('regularMarketPrice') or fast.get('previousClose')
-            prev_close = fast.get('regularMarketPreviousClose') or fast.get('previousClose')
-            
-            if price is None or prev_close is None or prev_close <= 0:
-                continue
-                
-            price = float(price)
-            prev_close = float(prev_close)
-            change = ((price - prev_close) / prev_close * 100)
-            
-            # Gap % using actual first trade of the session (pre-market open)
+            # 1. Finnhub real-time quote (most accurate for live market)
+            quote = None
             try:
-                open_series = intra['Open'][sym].dropna()
-                today_open = open_series.iloc[0] if not open_series.empty else price
-                gap_pct = ((today_open - prev_close) / prev_close * 100)
+                f_sym = sym
+                if sym.startswith('^'):
+                    f_sym = sym[1:]
+                elif '=F' in sym:
+                    f_sym = sym.split('=')[0]
+                elif sym == "DX-Y.NYB":
+                    f_sym = "DXY"
+                r = requests.get(f"https://finnhub.io/api/v1/quote?symbol={f_sym}&token={FINNHUB_API_KEY}", timeout=8)
+                r.raise_for_status()
+                d = r.json()
+                if d.get('c') and float(d['c']) > 0:
+                    quote = d
             except:
-                gap_pct = 0.0
-            
-            # RVOL
+                pass
+
+            # 2. Price extraction
+            if quote and quote.get('c'):
+                price = float(quote['c'])
+                prev_close = float(quote.get('pc') or price)
+            else:
+                # yfinance 1m fallback (excellent for futures, indices, extended hours)
+                close_series = intra['Close'][sym].dropna()
+                if close_series.empty:
+                    continue
+                price = float(close_series.iloc[-1])
+                daily_close = hist_data['Close'][sym].dropna()
+                prev_close = float(daily_close.iloc[-2]) if len(daily_close) >= 2 else float(daily_close.iloc[-1])
+
+            change = ((price - prev_close) / prev_close * 100) if prev_close > 0 else 0.0
+
+            # Gap %
+            gap_pct = 0.0
             try:
-                today_vol = intra['Volume'][sym].sum()
-                avg_vol = hist_data['Volume'][sym].iloc[-8:-1].mean()
+                mask = intra.index.strftime('%Y-%m-%d') == today_str
+                today_open_series = intra['Open'][sym][mask].dropna()
+                if not today_open_series.empty:
+                    gap_pct = ((today_open_series.iloc[0] - prev_close) / prev_close * 100)
+            except:
+                pass
+
+            # RVOL (today's volume vs average of prior full days)
+            rvol = 1.0
+            try:
+                mask = intra.index.strftime('%Y-%m-%d') == today_str
+                today_vol = float(intra['Volume'][sym][mask].sum())
+                avg_vol = float(hist_data['Volume'][sym].iloc[-15:-3].mean()) if len(hist_data['Volume'][sym]) > 5 else 1.0
                 rvol = today_vol / avg_vol if avg_vol > 0 else 1.0
             except:
-                rvol = 1.0
-            
+                pass
+
             rows.append({
                 "Asset": label, 
                 "Symbol": sym, 
-                "Price": round(price, 4), 
+                "Price": round(price, 4 if price < 10 else 2), 
                 "Gap %": round(gap_pct, 2),
                 "Change %": round(change, 2), 
                 "RVOL": round(rvol, 2)
@@ -864,4 +892,4 @@ with tab_bias:
     
     st.info("**Regime Logic**: >1.8% = Strong Bull | 0.6–1.8% = Bull | ±0.6% = Chop | -1.8 to -0.6 = Bear | <-1.8% = Strong Bear")
 
-st_autorefresh(interval=45000, key="global_refresh")   # 45-second live refresh
+st_autorefresh(interval=30000, key="global_refresh")   # 30-second live refresh (was 45s)
