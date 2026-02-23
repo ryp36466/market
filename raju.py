@@ -14,14 +14,15 @@ from streamlit_autorefresh import st_autorefresh
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ────────────────────────────────────────────────
-#  PAGE CONFIG + SECRETS
+#  PAGE CONFIG + SECRETS (SECURITY HARDENED)
 # ────────────────────────────────────────────────
 st.set_page_config(page_title="Alpha Terminal Pro", page_icon="🏛️", layout="wide")
 
-FINNHUB_KEY = st.secrets.get("FINNHUB_API_KEY", "d6au4n9r01qnr27itio0d6au4n9r01qnr27itiog")
+# SECURITY: No hardcoded fallback — will raise clear error if missing
+FINNHUB_KEY = st.secrets["FINNHUB_API_KEY"]
 
 # ────────────────────────────────────────────────
-#  EXPANDED TICKERS & SECTOR ROTATION FRAMEWORK
+#  TICKERS & SECTOR ROTATION FRAMEWORK
 # ────────────────────────────────────────────────
 GLOBAL_TICKERS = {
     "VIX": "^VIX", "ES": "ES=F", "NQ": "NQ=F", "YM": "YM=F", "RTY": "RTY=F",
@@ -70,7 +71,7 @@ ALL_SYMBOLS = list(set(list(symbol_to_label.keys()) +
 ANALYST_SYMBOLS = sorted(list(set([s for t in TRADING_THEMES.values() for s in t])))
 
 # ────────────────────────────────────────────────
-#  PARALLEL DATA ENGINE (STABLE)
+#  PARALLEL FINNHUB + YFINANCE (HARDENED)
 # ────────────────────────────────────────────────
 def fetch_finnhub_quote(sym):
     try:
@@ -105,10 +106,15 @@ def fetch_market_snapshot():
                 price = float(quote['c'])
                 prev_close = float(quote.get('pc') or price)
             else:
-                price = float(intra['Close'][sym].dropna().iloc[-1])
-                prev_close = float(hist['Close'][sym].dropna().iloc[-2] if len(hist['Close'][sym].dropna()) >= 2 else price)
+                price_series = intra['Close'][sym].dropna()
+                price = float(price_series.iloc[-1]) if not price_series.empty else 0.0
+                
+                # HARDENED: Defensive yesterday close (handles new IPOs / holidays)
+                daily_close = hist['Close'][sym].dropna()
+                prev_close = daily_close.iloc[-2] if len(daily_close) >= 2 else (daily_close.iloc[-1] if len(daily_close) > 0 else price)
 
-            change = ((price - prev_close) / prev_close * 100)
+            change = ((price - prev_close) / prev_close * 100) if prev_close > 0 else 0.0
+            
             gap = 0.0
             try:
                 today_open = intra['Open'][sym].loc[today_str].dropna().iloc[0]
@@ -138,7 +144,7 @@ def fetch_market_snapshot():
     return pd.DataFrame(rows), intra, hist
 
 # ────────────────────────────────────────────────
-#  HELPERS
+#  HELPERS (UNCHANGED)
 # ────────────────────────────────────────────────
 def calc_gamma_vectorized(S, K, T, v, r, q, types, OI):
     T = np.maximum(T, 1/365.0)
@@ -195,7 +201,7 @@ market_df, intra_data, hist_data = fetch_market_snapshot()
 macro_news = get_macro_news()
 
 # ────────────────────────────────────────────────
-#  PREMARKET SECTOR ROTATION CHECKLIST (NEW CORE FEATURE)
+#  PREMARKET SECTOR ROTATION CHECKLIST
 # ────────────────────────────────────────────────
 def build_premarket_checklist(df):
     if df.empty:
@@ -204,14 +210,12 @@ def build_premarket_checklist(df):
     tz = pytz.timezone('US/Eastern')
     est_now = datetime.datetime.now(tz).strftime("%H:%M:%S")
 
-    # Macro Bias
     es = df[df['Symbol'] == 'ES=F']['Change %'].iloc[0] if not df[df['Symbol'] == 'ES=F'].empty else 0
     nq = df[df['Symbol'] == 'NQ=F']['Change %'].iloc[0] if not df[df['Symbol'] == 'NQ=F'].empty else 0
     rty = df[df['Symbol'] == 'RTY=F']['Change %'].iloc[0] if not df[df['Symbol'] == 'RTY=F'].empty else 0
     tnx = df[df['Symbol'] == '^TNX']['Change %'].iloc[0] if not df[df['Symbol'] == '^TNX'].empty else 0
     btc = df[df['Symbol'] == 'BTC-USD']['Change %'].iloc[0] if not df[df['Symbol'] == 'BTC-USD'].empty else 0
 
-    # Sector Strength
     sector_perf = {}
     for name, etf in SECTOR_ETFS.items():
         row = df[df['Symbol'] == etf]
@@ -219,13 +223,9 @@ def build_premarket_checklist(df):
             sector_perf[name] = round(row['Change %'].iloc[0], 2)
 
     strongest = max(sector_perf, key=sector_perf.get) if sector_perf else "N/A"
-    strongest_etf = SECTOR_ETFS[strongest]
+    top_leaders = df[df['Symbol'].isin(TRADING_THEMES.get(strongest.replace(" (", " ("), []))].nlargest(5, 'Change %')[['Asset', 'Change %', 'Gap %']]
 
-    # Top Leaders in Strongest Sector
-    leaders = df[df['Symbol'].isin(TRADING_THEMES.get(strongest.replace(" (", " ("), []))]
-    top_leaders = leaders.nlargest(5, 'Change %')[['Asset', 'Change %', 'Gap %']]
-
-    checklist = f"""
+    return f"""
 **🕓 PREMARKET CHECKLIST — {est_now} EST**
 
 ### STEP 1: MACRO BIAS
@@ -248,7 +248,6 @@ def build_premarket_checklist(df):
 
 **Written Plan**: Only trade leaders in **{strongest}** with volume & structure.
 """
-    return checklist
 
 # ────────────────────────────────────────────────
 #  UI
@@ -257,13 +256,10 @@ st.title("🏛️ Alpha Terminal Pro")
 st.caption(f"Last Sync: {datetime.datetime.now(pytz.timezone('US/Eastern')).strftime('%H:%M:%S')} EST | Live Parallel Engine")
 
 st.markdown("---")
-
-# BATTLE PLAN + CHECKLIST
 col_plan, col_vitals = st.columns([2, 1])
 with col_plan:
     st.subheader("📝 Morning Battle Plan")
-    plan_text = build_premarket_checklist(market_df).split("### STEP 4")[0]  # reuse macro part
-    st.info(plan_text)
+    st.info(build_premarket_checklist(market_df).split("### STEP 4")[0])
 
 with col_vitals:
     st.subheader("📡 Vitals")
@@ -276,7 +272,7 @@ with col_vitals:
 st.sidebar.metric("VIX (Fear Index)", f"{vix_val:.2f}", delta="Risk On" if vix_val < 20 else "Volatility")
 
 # ────────────────────────────────────────────────
-#  TABS (New Checklist Tab First)
+#  TABS
 # ────────────────────────────────────────────────
 tabs = st.tabs([
     "🚀 Premarket Rotation Checklist",
@@ -289,13 +285,13 @@ tabs = st.tabs([
     "💼 Paper Trading"
 ])
 
-# TAB 0 — NEW CHECKLIST (FULL VERSION)
 with tabs[0]:
     st.subheader("🚀 PREMARKET SECTOR ROTATION CHECKLIST")
     st.markdown(build_premarket_checklist(market_df))
-    st.caption("Copy this into your notes every morning. Trade **only** the strongest sector leaders.")
+    st.caption("Copy → Notes → Trade ONLY the strongest sector leaders.")
 
-# TAB 1
+# (All other tabs remain exactly the same as previous version — GEX, PCR, Analyst, Regime, Paper Trading)
+
 with tabs[1]:
     st.subheader("🗝️ Key Indices & Mag7")
     col1, col2 = st.columns([2, 1])
@@ -306,16 +302,14 @@ with tabs[1]:
         mag7 = market_df[market_df['Symbol'].isin(MAG7_TICKERS.values())].sort_values('Change %', ascending=False)
         st.dataframe(mag7[['Asset', 'Price', 'Change %', 'Gap %']].style.background_gradient(cmap='RdYlGn', subset=['Change %']), hide_index=True, use_container_width=True)
 
-# TAB 2
 with tabs[2]:
-    cols = st.columns(len(TRADING_THEMES))
+    cols = st.columns(4)
     for i, (name, syms) in enumerate(TRADING_THEMES.items()):
         with cols[i % 4]:
             st.markdown(f"**{name}**")
             theme_df = market_df[market_df['Symbol'].isin(syms)]
             st.dataframe(theme_df[['Asset', 'Price', 'Change %']].style.background_gradient(cmap='RdYlGn'), hide_index=True, use_container_width=True)
 
-# TAB 3 — GEX
 with tabs[3]:
     user_ticker = st.text_input("GEX Ticker", value="SPY").upper().strip()
     if user_ticker:
@@ -333,19 +327,16 @@ with tabs[3]:
         except Exception as e:
             st.error(f"Options data unavailable: {e}")
 
-# TAB 4 — PCR
 with tabs[4]:
     st.subheader("🐳 Put/Call Volume Ratio")
     st.dataframe(get_pcr_data().style.background_gradient(subset=['PCR'], cmap='RdYlGn_r'), hide_index=True, use_container_width=True)
 
-# TAB 5 — Analyst
 with tabs[5]:
     st.subheader("📊 Analyst Ratings")
     analyst_df = get_analyst_ratings()
     if not analyst_df.empty:
         st.dataframe(analyst_df.style.background_gradient(cmap='RdYlGn', subset=['Upside %']), hide_index=True, use_container_width=True)
 
-# TAB 6 — Regime + Alpha Delta
 with tabs[6]:
     st.subheader("🔍 Market Regime Analysis")
     def get_bias(chg):
@@ -388,7 +379,6 @@ with tabs[6]:
         except:
             st.warning("RS data syncing...")
 
-# TAB 7 — Paper Trading
 with tabs[7]:
     st.subheader("💼 Paper Trading Simulator")
     if 'cash' not in st.session_state: st.session_state.cash = 100000.0
@@ -453,7 +443,7 @@ with tabs[7]:
         st.dataframe(pd.DataFrame(portfolio_rows).style.background_gradient(cmap='RdYlGn', subset=['P&L $']), hide_index=True, use_container_width=True)
 
 # ────────────────────────────────────────────────
-#  LIVE ALERTS (VWAP + RVOL)
+#  LIVE ALERTS — HARDENED VWAP
 # ────────────────────────────────────────────────
 if 'alert_log' not in st.session_state:
     st.session_state.alert_log = []
@@ -474,8 +464,8 @@ def process_live_alerts(df, intra):
             today_data = today_data[today_data.index.strftime('%Y-%m-%d') == today_str]
             if len(today_data) >= 3:
                 v_sum = today_data['Volume'].sum()
-                pv_sum = (today_data['Close'] * today_data['Volume']).sum()
-                vwap = pv_sum / v_sum if v_sum > 0 else 0
+                # HARDENED Zero-Volume Protection
+                vwap = (today_data['Close'] * today_data['Volume']).sum() / v_sum if v_sum > 0 else price
                 prev_price = today_data['Close'].iloc[-2]
                 if prev_price < vwap and price > vwap:
                     trigger_alert(f"{sym} 🚀 CROSSING ABOVE VWAP @ ${price:.2f}", "🚀")
