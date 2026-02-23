@@ -2,6 +2,8 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
+import re
+from streamlit_autorefresh import st_autorefresh
 import datetime
 import pytz
 import requests
@@ -10,119 +12,295 @@ from finvizfinance.news import News
 import plotly.express as px
 import plotly.graph_objects as go
 from scipy.stats import norm
-from streamlit_autorefresh import st_autorefresh
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ────────────────────────────────────────────────
-#  PAGE CONFIG + SECRETS
+#  PAGE CONFIG
 # ────────────────────────────────────────────────
 st.set_page_config(page_title="Alpha Terminal Pro", page_icon="🏛️", layout="wide")
 
-FINNHUB_KEY = st.secrets.get("FINNHUB_API_KEY", "d6au4n9r01qnr27itio0d6au4n9r01qnr27itiog")
-
 # ────────────────────────────────────────────────
-#  TICKERS & THEMES
+#  TICKER CONFIGS + TRADING THEMES
 # ────────────────────────────────────────────────
 GLOBAL_TICKERS = {
-    "VIX": "^VIX", "ES (S&P 500 Fut)": "ES=F", "NQ (Nasdaq Fut)": "NQ=F",
-    "YM (Dow Fut)": "YM=F", "RTY (Russell 2000)": "RTY=F", "SPY": "SPY", 
-    "QQQ": "QQQ", "10Y Yield": "^TNX", "DXY": "DX-Y.NYB", "S&P 500": "^GSPC"
+    "VIX": "^VIX",
+    "ES (S&P 500 Fut)": "ES=F",
+    "NQ (Nasdaq Fut)": "NQ=F",
+    "YM (Dow Fut)": "YM=F",
+    "RTY (Russell 2000)": "RTY=F",
+    "SPY": "SPY", 
+    "QQQ": "QQQ", 
+    "10Y Yield": "^TNX",
+    "DXY": "DX-Y.NYB", 
+    "S&P 500": "^GSPC"
 }
 
 SECTOR_TICKERS = {
     "Tech (XLK)": "XLK", "Software (IGV)": "IGV", "Semiconductor (SMH)": "SMH",
     "Financials (XLF)": "XLF", "Energy (XLE)": "XLE", "Healthcare (XLV)": "XLV",
-    "Disc (XLY)": "XLY", "Indus (XLI)": "XLI", "Utils (XLU)": "XLU"
+    "Disc (XLY)": "XLY", "Indus (XLI)": "XLI", "Utils (XLU)": "XLU",
+    "RE": "XLRE", "Staples (XLP)": "XLP", "Materials (XLB)": "XLB"
+}
+
+NEO_CLOUD_TICKERS = {
+    "Nebius": "NBIS", "Vertiv": "VRT", "Arista": "ANET",
+    "Supermicro": "SMCI", "Dell": "DELL", "Palantir": "PLTR"
+}
+
+MAG7_TICKERS = {
+    "Apple": "AAPL", "MSFT": "MSFT", "Nvidia": "NVDA", "Amazon": "AMZN",
+    "Google": "GOOGL", "Meta": "META", "Tesla": "TSLA"
 }
 
 TRADING_THEMES = {
-    "🔵 SEMICONDUCTORS": ["SMH", "NVDA", "AMD", "AVGO", "TSM", "ARM"],
-    "🟣 SOFTWARE / SaaS": ["IGV", "MSFT", "CRM", "NOW", "PLTR", "ORCL"],
-    "🟢 NEO CLOUD / AI": ["VRT", "ANET", "SMCI", "DELL", "CRWD"],
-    "🟠 CRYPTO / BTC": ["BTC-USD", "MSTR", "COIN", "MARA", "IBIT"],
-    "🟤 SMALL CAPS": ["IWM", "TNA", "ASTS", "OKLO"]
+    "🔵 SEMICONDUCTORS (SMH/SOXL)": ["SMH", "SOXL", "NVDA", "AMD", "AVGO", "QCOM", "INTC", "MU", "MRVL", "TSM", "ARM", "SMCI", "WDC", "ALAB"],
+    "🟣 SOFTWARE / SaaS (IGV)": ["IGV", "MSFT", "CRM", "NOW", "ADBE", "CRWD", "MDB", "PLTR", "RBRK", "ORCL", "IBM"],
+    "🟢 NEO CLOUD / AI INFRA": ["CRWD", "NBIS", "APP", "ALAB", "RBRK", "PLTR", "SMCI", "DELL"],
+    "🟡 MEGA CAP TECH (QQQ)": ["QQQ", "META", "GOOGL", "AAPL", "AMZN", "MSFT", "NVDA", "TSLA"],
+    "🟠 CRYPTO / BTC": ["BTC-USD", "IBIT", "MSTR", "COIN", "CIFR", "IREN", "BMNR", "CRCL"],
+    "🟤 SMALL CAPS (IWM/TNA)": ["IWM", "TNA", "QBTS", "RGTI", "ASTS", "OKLO", "TEM"],
+    "🔴 CONSUMER / HIGH BETA": ["AMZN", "TSLA", "RBLX", "CVNA", "RIVN", "LULU", "NKE", "DUOL", "AAL"],
+    "🏦 FINANCIALS": ["JPM", "SOFI", "HOOD", "LMND", "UNH"],
+    "⚡ ENERGY": ["XOM", "OXY", "BE", "OKLO"],
+    "🏗️ INDUSTRIALS/SPACE": ["CAT", "BA", "RKLB", "ASTS", "FDX"],
+    "🏥 HEALTHCARE": ["LLY", "UNH", "TEM"],
+    "🥇 COMMODITIES/METALS": ["GC=F", "SLV", "AGQ", "ZSL", "ALB", "MP"]
 }
 
-MAG7_TICKERS = {"Apple": "AAPL", "MSFT": "MSFT", "Nvidia": "NVDA", "Amazon": "AMZN",
-                "Google": "GOOGL", "Meta": "META", "Tesla": "TSLA"}
+# ────── Single row per symbol (no duplicates) ──────
+symbol_to_label = {}
+for d in [GLOBAL_TICKERS, SECTOR_TICKERS, NEO_CLOUD_TICKERS, MAG7_TICKERS]:
+    for label, sym in d.items():
+        if sym not in symbol_to_label:
+            symbol_to_label[sym] = label
+
+for sublist in TRADING_THEMES.values():
+    for sym in sublist:
+        if sym not in symbol_to_label:
+            symbol_to_label[sym] = sym
+
+ALL_SYMBOLS = list(symbol_to_label.keys())
+ANALYST_SYMBOLS = sorted({sym for sublist in TRADING_THEMES.values() for sym in sublist})
+
+# NEW: Dedicated hot list for Mag7 + SPY + QQQ
 MAG7_HOT_SYMBOLS = list(MAG7_TICKERS.values()) + ["SPY", "QQQ"]
 
-symbol_to_label = {v: k for d in [GLOBAL_TICKERS, SECTOR_TICKERS, MAG7_TICKERS] for k, v in d.items()}
-ALL_SYMBOLS = list(set(list(symbol_to_label.keys()) + [s for t in TRADING_THEMES.values() for s in t]))
-ANALYST_SYMBOLS = sorted(list(set([s for t in TRADING_THEMES.values() for s in t])))
+HUGE_CAP_SYMBOLS = {
+    'WMT', 'BABA', 'DE', 'SO', 'NEM', 'BKNG', 'TXRH', 'RIO',
+    'AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META', 'TSLA',
+    'T', 'VZ', 'XOM', 'CVX', 'JPM', 'BAC', 'WFC', 'PG', 'KO',
+    'HD', 'COST', 'NFLX', 'DIS', 'PFE', 'MRK', 'LLY', 'AVGO'
+}
+
+FINNHUB_API_KEY = "d6au4n9r01qnr27itio0d6au4n9r01qnr27itiog"
 
 # ────────────────────────────────────────────────
-#  PARALLEL FINNHUB + YFINANCE (STABLE)
+#  HIGH-IMPACT NEWS FILTER (Professional Grade)
 # ────────────────────────────────────────────────
-def fetch_finnhub_quote(sym):
-    try:
-        f_sym = sym.replace('^', '').split('=')[0] if any(x in sym for x in ['^', '=']) else sym
-        if sym == "DX-Y.NYB": f_sym = "DXY"
-        r = requests.get(f"https://finnhub.io/api/v1/quote?symbol={f_sym}&token={FINNHUB_KEY}", timeout=6)
-        r.raise_for_status()
-        return sym, r.json()
-    except:
-        return sym, None
+HIGH_IMPACT_KEYWORDS = [
+    "earnings", "eps", "revenue", "guidance", "outlook", "beat", "miss", "raised", "cut", "lowered", "hike",
+    "upgrade", "downgrade", "price target", "pt raised", "pt cut",
+    "acquire", "acquisition", "merger", "buyout", "takeover", "deal", "partnership",
+    "sec", "doj", "lawsuit", "investigation", "probe", "settlement", "antitrust", "sued",
+    "fed", "inflation", "tariff", "sanctions", "regulation",
+    "surge", "plunge", "soar", "collapse", "spike", "jump", "tumble", "slump", "crash", "%"
+]
 
-@st.cache_data(ttl=12)
+LOW_IMPACT_KEYWORDS = [
+    "interview", "opinion", "watch", "preview", "recap", "morning brief", "analysis",
+    "blog", "commentary", "podcast", "video", "roundup", "exclusive"
+]
+
+def is_high_impact(title):
+    t = title.lower()
+    if any(kw in t for kw in LOW_IMPACT_KEYWORDS):
+        return False
+    if any(kw in t for kw in HIGH_IMPACT_KEYWORDS):
+        return True
+    return False
+
+def impact_score(title):
+    t = title.lower()
+    score = 0
+    if any(k in t for k in ["earnings", "eps", "revenue", "guidance"]): score += 5
+    if any(k in t for k in ["upgrade", "downgrade", "price target"]): score += 4
+    if any(k in t for k in ["acquisition", "merger", "buyout"]): score += 4
+    if any(k in t for k in ["lawsuit", "sec", "investigation"]): score += 4
+    if "%" in t: score += 3
+    if any(k in t for k in ["fed", "inflation", "tariff"]): score += 2
+    return score
+
+# ────────────────────────────────────────────────
+#  FIXED DATA HELPERS - NOW RELIABLY LIVE DURING MARKET HOURS
+# ────────────────────────────────────────────────
+
+@st.cache_data(ttl=10)
 def fetch_market_snapshot():
-    intra = yf.download(ALL_SYMBOLS, period="3d", interval="1m", prepost=True, progress=False, threads=False)
-    hist = yf.download(ALL_SYMBOLS, period="15d", interval="1d", progress=False, threads=False)
-
-    with ThreadPoolExecutor(max_workers=30) as executor:
-        future_to_sym = {executor.submit(fetch_finnhub_quote, s): s for s in ALL_SYMBOLS}
-        finnhub_data = {}
-        for future in as_completed(future_to_sym):
-            sym, data = future.result()
-            finnhub_data[sym] = data
-
+    """FIXED: Uses Finnhub real-time quotes (fastest live) + yfinance 1m intraday fallback.
+    This solves the non-updating price issue in live/pre/post market."""
+    intra = yf.download(ALL_SYMBOLS, period="3d", interval="1m", prepost=True, progress=False, threads=True)
+    hist_data = yf.download(ALL_SYMBOLS, period="15d", interval="1d", progress=False)
+    
     rows = []
     tz = pytz.timezone('US/Eastern')
-    today_str = datetime.datetime.now(tz).strftime('%Y-%m-%d')
+    now_est = datetime.datetime.now(tz)
+    today_str = now_est.strftime('%Y-%m-%d')
 
     for sym in ALL_SYMBOLS:
+        label = symbol_to_label.get(sym, sym)
         try:
-            quote = finnhub_data.get(sym)
-            if quote and quote.get('c') and quote['c'] > 0:
-                price = float(quote['c'])
-                prev_close = float(quote.get('pc') or price)
-            else:
-                price = float(intra['Close'][sym].dropna().iloc[-1])
-                prev_close = float(hist['Close'][sym].dropna().iloc[-2] if len(hist['Close'][sym].dropna()) >= 2 else price)
-
-            change = ((price - prev_close) / prev_close * 100)
-            
-            gap = 0.0
+            # 1. Finnhub real-time quote (most accurate for live market)
+            quote = None
             try:
-                today_open = intra['Open'][sym].loc[today_str].dropna().iloc[0]
-                gap = ((today_open - prev_close) / prev_close * 100)
+                f_sym = sym
+                if sym.startswith('^'):
+                    f_sym = sym[1:]
+                elif '=F' in sym:
+                    f_sym = sym.split('=')[0]
+                elif sym == "DX-Y.NYB":
+                    f_sym = "DXY"
+                r = requests.get(f"https://finnhub.io/api/v1/quote?symbol={f_sym}&token={FINNHUB_API_KEY}", timeout=8)
+                r.raise_for_status()
+                d = r.json()
+                if d.get('c') and float(d['c']) > 0:
+                    quote = d
             except:
                 pass
 
+            # 2. Price extraction
+            if quote and quote.get('c'):
+                price = float(quote['c'])
+                prev_close = float(quote.get('pc') or price)
+            else:
+                # yfinance 1m fallback (excellent for futures, indices, extended hours)
+                close_series = intra['Close'][sym].dropna()
+                if close_series.empty:
+                    continue
+                price = float(close_series.iloc[-1])
+                daily_close = hist_data['Close'][sym].dropna()
+                prev_close = float(daily_close.iloc[-2]) if len(daily_close) >= 2 else float(daily_close.iloc[-1])
+
+            change = ((price - prev_close) / prev_close * 100) if prev_close > 0 else 0.0
+
+            # Gap %
+            gap_pct = 0.0
+            try:
+                mask = intra.index.strftime('%Y-%m-%d') == today_str
+                today_open_series = intra['Open'][sym][mask].dropna()
+                if not today_open_series.empty:
+                    gap_pct = ((today_open_series.iloc[0] - prev_close) / prev_close * 100)
+            except:
+                pass
+
+            # RVOL (today's volume vs average of prior full days)
             rvol = 1.0
             try:
-                today_vol = intra['Volume'][sym].loc[today_str].sum()
-                avg_vol = hist['Volume'][sym].iloc[-15:-2].mean()
+                mask = intra.index.strftime('%Y-%m-%d') == today_str
+                today_vol = float(intra['Volume'][sym][mask].sum())
+                avg_vol = float(hist_data['Volume'][sym].iloc[-15:-3].mean()) if len(hist_data['Volume'][sym]) > 5 else 1.0
                 rvol = today_vol / avg_vol if avg_vol > 0 else 1.0
             except:
                 pass
 
             rows.append({
-                "Asset": symbol_to_label.get(sym, sym),
-                "Symbol": sym,
-                "Price": round(price, 4 if price < 10 else 2),
-                "Gap %": round(gap, 2),
-                "Change %": round(change, 2),
+                "Asset": label, 
+                "Symbol": sym, 
+                "Price": round(price, 4 if price < 10 else 2), 
+                "Gap %": round(gap_pct, 2),
+                "Change %": round(change, 2), 
                 "RVOL": round(rvol, 2)
             })
         except:
             continue
+    return pd.DataFrame(rows), intra, hist_data
 
-    return pd.DataFrame(rows), intra, hist
 
-# ────────────────────────────────────────────────
-#  HELPERS
-# ────────────────────────────────────────────────
+def get_earnings_calendar_finnhub(date_str):
+    url = f"https://finnhub.io/api/v1/calendar/earnings?from={date_str}&to={date_str}&token={FINNHUB_API_KEY}"
+    try:
+        r = requests.get(url, timeout=10); r.raise_for_status()
+        data = r.json()
+        filtered = []; fallback = []
+        for item in data.get('earningsCalendar', []):
+            symbol = item.get('symbol', '').upper()
+            eps_est = item.get('epsEstimate')
+            eps_act = item.get('epsActual')
+            rev_est = item.get('revenueEstimate')
+            rev_act = item.get('revenueActual')
+            eps_beat = "—"
+            if eps_act is not None and eps_est is not None:
+                eps_beat = "✅ Beat" if eps_act > eps_est else "❌ Miss" if eps_act < eps_est else "Met"
+            rev_beat = "—"
+            if rev_act is not None and rev_est is not None:
+                rev_beat = "✅ Beat" if rev_act > rev_est else "❌ Miss" if rev_act < rev_est else "Met"
+            entry = {
+                "When": "", "Symbol": symbol, "Company": symbol,
+                "EPS Est": eps_est if eps_est is not None else "—",
+                "EPS Act": eps_act if eps_act is not None else "—",
+                "Rev Est (B)": round(rev_est / 1e9, 2) if rev_est else "—",
+                "Rev Act (B)": round(rev_act / 1e9, 2) if rev_act else "—",
+                "EPS Beat": eps_beat, "Rev Beat": rev_beat
+            }
+            fallback.append(entry)
+            if symbol in HUGE_CAP_SYMBOLS:
+                filtered.append(entry)
+        return filtered if filtered else fallback
+    except:
+        return []
+
+
+def get_todays_earnings():
+    today = datetime.datetime.now(pytz.timezone('US/Eastern')).date().strftime('%Y-%m-%d')
+    data = get_earnings_calendar_finnhub(today)
+    for d in data: d["When"] = "Today"
+    return data
+
+
+def get_yesterdays_earnings():
+    yest = (datetime.datetime.now(pytz.timezone('US/Eastern')) - datetime.timedelta(days=1)).date().strftime('%Y-%m-%d')
+    data = get_earnings_calendar_finnhub(yest)
+    for d in data: d["When"] = "Yesterday"
+    return data
+
+
+def get_tomorrows_earnings():
+    tom = (datetime.datetime.now(pytz.timezone('US/Eastern')) + datetime.timedelta(days=1)).date().strftime('%Y-%m-%d')
+    data = get_earnings_calendar_finnhub(tom)
+    for d in data: d["When"] = "Tomorrow"
+    return data
+
+
+def get_pcr_data():
+    targets = {**MAG7_TICKERS, "SPY": "SPY", "QQQ": "QQQ"}
+    results = []
+    for label, sym in targets.items():
+        try:
+            tk = yf.Ticker(sym)
+            opts = tk.options
+            if opts:
+                cv = pv = 0
+                for exp in opts[:2]:
+                    ch = tk.option_chain(exp)
+                    cv += ch.calls['volume'].sum()
+                    pv += ch.puts['volume'].sum()
+                pcr = pv / cv if cv > 0 else 0
+                results.append({"Asset": label, "PCR": round(pcr, 2),
+                                "Sentiment": "🐂 Bull" if pcr < 0.85 else "🐻 Bear" if pcr > 1.15 else "⚖️ Neu"})
+        except:
+            continue
+    return pd.DataFrame(results)
+
+
+def get_sentiment_score(text):
+    bull = ['upbeat','growth','surge','rally','beat','buy','bullish','expansion','profit','gain','positive','jump','beat','upgrade','raise','strong','outperform','higher','rise','soar']
+    bear = ['slump','drop','fall','miss','sell','bearish','contraction','loss','negative','inflation','fear','risk','sink','downgrade','cut','weak','underperform','lower','decline','plunge']
+    score = sum(1 for w in bull if w in text.lower()) - sum(1 for w in bear if w in text.lower())
+    if score > 2: return "🟢 Bullish", score
+    if score < -2: return "🔴 Bearish", score
+    if score > 0: return "🟡 Mild Bull", score
+    if score < 0: return "🟠 Mild Bear", score
+    return "⚪ Neutral", 0
+
+
 def calc_gamma_vectorized(S, K, T, v, r, q, types, OI):
     T = np.maximum(T, 1/365.0)
     v = np.maximum(v, 0.01)
@@ -131,347 +309,587 @@ def calc_gamma_vectorized(S, K, T, v, r, q, types, OI):
     val = gamma * OI * 100 * S
     return np.where(types == 'call', val, -val)
 
-@st.cache_data(ttl=600)
-def get_pcr_data():
-    results = []
-    for sym in ["SPY", "QQQ", "NVDA", "AAPL", "TSLA"]:
-        try:
-            tk = yf.Ticker(sym)
-            chain = tk.option_chain(tk.options[0])
-            cv = chain.calls['volume'].sum()
-            pv = chain.puts['volume'].sum()
-            pcr = pv / cv if cv > 0 else 0
-            results.append({"Asset": sym, "PCR": round(pcr, 2),
-                            "Sentiment": "🐂 Bull" if pcr < 0.7 else "🐻 Bear" if pcr > 1.1 else "⚖️ Neu"})
-        except:
-            continue
-    return pd.DataFrame(results)
 
-@st.cache_data(ttl=1800)
-def get_analyst_ratings():
-    ratings = []
-    for sym in ANALYST_SYMBOLS[:20]:
+# ────────────────────────────────────────────────
+#  HIGH-IMPACT THEME STOCK NEWS
+# ────────────────────────────────────────────────
+@st.cache_data(ttl=180)
+def get_theme_stock_news(max_stocks=30):
+    news_items = []
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    
+    for sym in ANALYST_SYMBOLS[:max_stocks]:
         try:
-            info = yf.Ticker(sym).info
-            ratings.append({
-                "Asset": symbol_to_label.get(sym, sym),
-                "Consensus": info.get("recommendationKey", "N/A").replace('_', ' ').title(),
-                "Target Mean": info.get("targetMeanPrice"),
-                "Current": info.get("currentPrice"),
-                "Upside %": round(((info.get("targetMeanPrice") or 0) / (info.get("currentPrice") or 1) - 1) * 100, 1)
-            })
+            f_sym = "BTC" if sym == "BTC-USD" else sym.split("=")[0]
+            url = f"https://finviz.com/quote.ashx?t={f_sym.upper()}"
+            r = requests.get(url, headers=headers, timeout=10)
+            soup = BeautifulSoup(r.text, "html.parser")
+            table = soup.find("table", class_="news-table")
+            if not table: continue
+            
+            for row in table.find_all("tr")[:8]:
+                tds = row.find_all("td")
+                if len(tds) < 2: continue
+                time_str = tds[0].text.strip()
+                a_tag = tds[1].find("a")
+                if not a_tag: continue
+                title = a_tag.text.strip()
+                if len(title) < 25: continue
+                
+                if not is_high_impact(title):
+                    continue
+                
+                link = a_tag.get("href")
+                if not link.startswith("http"): link = "https://finviz.com" + link
+                
+                label, sent_score = get_sentiment_score(title)
+                imp_score = impact_score(title)
+                
+                news_items.append({
+                    "Asset": symbol_to_label.get(sym, sym),
+                    "Symbol": sym,
+                    "Title": title,
+                    "URL": link,
+                    "Source": "Finviz",
+                    "Sentiment": label,
+                    "Score": sent_score,
+                    "Impact": imp_score,
+                    "Time": time_str
+                })
         except:
             continue
-    return pd.DataFrame(ratings)
+    
+    df = pd.DataFrame(news_items)
+    if not df.empty:
+        df = df.sort_values(by=["Impact", "Score"], ascending=False).drop_duplicates(subset=["Title"])
+    return df
+
+
+# ────────────────────────────────────────────────
+#  HIGH-IMPACT MAG7 + SPY + QQQ HOT NEWS
+# ────────────────────────────────────────────────
+@st.cache_data(ttl=180)
+def get_mag7_hot_news():
+    news_items = []
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    
+    for sym in MAG7_HOT_SYMBOLS:
+        try:
+            f_sym = "BTC" if sym == "BTC-USD" else sym.split("=")[0]
+            url = f"https://finviz.com/quote.ashx?t={f_sym.upper()}"
+            r = requests.get(url, headers=headers, timeout=10)
+            soup = BeautifulSoup(r.text, "html.parser")
+            table = soup.find("table", class_="news-table")
+            if not table: continue
+            
+            for row in table.find_all("tr")[:10]:
+                tds = row.find_all("td")
+                if len(tds) < 2: continue
+                time_str = tds[0].text.strip()
+                a_tag = tds[1].find("a")
+                if not a_tag: continue
+                title = a_tag.text.strip()
+                if len(title) < 25: continue
+                
+                if not is_high_impact(title):
+                    continue
+                
+                link = a_tag.get("href")
+                if not link.startswith("http"): link = "https://finviz.com" + link
+                
+                label, sent_score = get_sentiment_score(title)
+                imp_score = impact_score(title)
+                
+                news_items.append({
+                    "Asset": symbol_to_label.get(sym, sym),
+                    "Symbol": sym,
+                    "Title": title,
+                    "URL": link,
+                    "Source": "Finviz",
+                    "Sentiment": label,
+                    "Score": sent_score,
+                    "Impact": imp_score,
+                    "Time": time_str
+                })
+        except:
+            continue
+    
+    df = pd.DataFrame(news_items)
+    if not df.empty:
+        df = df.sort_values(by=["Impact", "Score"], ascending=False).drop_duplicates(subset=["Title"])
+    return df
+
 
 @st.cache_data(ttl=300)
 def get_macro_news():
     try:
         return News().get_news()['news'].head(25).to_dict('records')
     except:
-        return []
+        try:
+            headers = {"User-Agent": "Mozilla/5.0"}
+            r = requests.get("https://finviz.com/news.ashx", headers=headers, timeout=10)
+            soup = BeautifulSoup(r.text, "html.parser")
+            table = soup.find("table", id="news-table")
+            if not table: return []
+            news_list = []
+            for row in table.find_all("tr")[:25]:
+                cells = row.find_all("td")
+                if len(cells) != 2: continue
+                a = cells[1].find("a", class_="tab-link-news")
+                if a:
+                    news_list.append({"Title": a.text.strip(), "URL": a["href"], "Source": "Finviz", "Date": cells[0].text.strip()})
+            return news_list
+        except:
+            return []
+
 
 # ────────────────────────────────────────────────
-#  FETCH DATA
+#  RELIABLE YAHOO ANALYST RATINGS
+# ────────────────────────────────────────────────
+@st.cache_data(ttl=1800)
+def get_analyst_ratings():
+    ratings = []
+    rating_map = {
+        "strong_buy": ("🚀 Strong Buy", 5),
+        "buy": ("🟢 Buy", 4),
+        "hold": ("⚖️ Hold", 3),
+        "sell": ("🔴 Sell", 2),
+        "strong_sell": ("💥 Strong Sell", 1),
+    }
+    
+    for sym in ANALYST_SYMBOLS:
+        try:
+            tk = yf.Ticker(sym)
+            info = tk.get_info()
+            
+            raw_key = info.get("recommendationKey", None)
+            display_name, bull_score = rating_map.get(raw_key, ("—", 0))
+            
+            target_mean = info.get("targetMeanPrice")
+            current = info.get("currentPrice")
+            target_high = info.get("targetHighPrice")
+            target_low = info.get("targetLowPrice")
+            analyst_count = info.get("numberOfAnalystOpinions", 0)
+            
+            upside = ((target_mean - current) / current * 100) if target_mean and current else None
+            
+            ratings.append({
+                "Asset": symbol_to_label.get(sym, sym),
+                "Symbol": sym,
+                "Consensus": display_name,
+                "Bull Score": bull_score,
+                "Target Mean": target_mean,
+                "Target High": target_high,
+                "Target Low": target_low,
+                "Current Price": current,
+                "Upside %": round(upside, 1) if upside is not None else None,
+                "Analyst Count": int(analyst_count)
+            })
+        except:
+            continue
+    
+    return pd.DataFrame(ratings)
+
+
+# ────────────────────────────────────────────────
+#  MAIN UI
 # ────────────────────────────────────────────────
 market_df, intra_data, hist_data = fetch_market_snapshot()
-macro_news = get_macro_news()
+est = pytz.timezone('US/Eastern')
+time_now = datetime.datetime.now(est).strftime('%H:%M:%S')
 
-# ────────────────────────────────────────────────
-#  BATTLE PLAN
-# ────────────────────────────────────────────────
-def generate_battle_plan(df, macro_news_list):
-    if df.empty:
-        return "Market data loading..."
-    
-    spy_row = df[df['Symbol'] == 'SPY']
-    vix_row = df[df['Symbol'] == '^VIX']
-    
-    spy_chg = spy_row['Change %'].iloc[0] if not spy_row.empty else 0
-    vix_val = vix_row['Price'].iloc[0] if not vix_row.empty else 20
-    
-    top_gappers = df.nlargest(3, 'Gap %')
-    gap_names = ", ".join(top_gappers['Symbol'].tolist())
-
-    macro_titles = " ".join([item.get('Title', '').lower() for item in macro_news_list[:5]])
-    is_fed = any(k in macro_titles for k in ["fed", "inflation", "rate"])
-    is_geo = any(k in macro_titles for k in ["tariff", "war", "china", "trump"])
-
-    if spy_chg > 0.5:
-        mood = "The market is showing strong **Risk-On** appetite with a gap up."
-    elif spy_chg < -0.5:
-        mood = "The market is in **Defensive Mode** with significant selling pressure."
-    else:
-        mood = "We are looking at a **Neutral/Chop Open** with low directional conviction."
-
-    if is_fed:
-        catalyst = "Macro focus is centered on **Central Bank policy** and inflation data."
-    elif is_geo:
-        catalyst = "Geopolitical headlines and **trade tensions** are driving the narrative."
-    else:
-        catalyst = "Action is largely **Sector-Specific**, driven by earnings and individual catalysts."
-
-    if vix_val > 25:
-        tactic = "High Volatility detected. **Tighten stops** and avoid oversized positions."
-    elif not top_gappers.empty and top_gappers['Gap %'].iloc[0] > 2:
-        tactic = f"Watch **{gap_names}** for a 'Gap & Go' setup if opening ranges hold."
-    else:
-        tactic = "Patience is key; wait for the 15-minute opening range to define the day's trend."
-
-    return f"{mood} {catalyst} {tactic}"
-
-# ────────────────────────────────────────────────
-#  UI
-# ────────────────────────────────────────────────
 st.title("🏛️ Alpha Terminal Pro")
-st.caption(f"Last Sync: {datetime.datetime.now(pytz.timezone('US/Eastern')).strftime('%H:%M:%S')} EST | Live Parallel Engine")
+st.caption(f"EST {time_now} | Data as of {datetime.date.today()} | Day-Trader Edition with Macro Pulse")
 
-st.markdown("---")
-col_plan, col_vitals = st.columns([3, 1])
-with col_plan:
-    st.subheader("📝 Morning Battle Plan")
-    plan_text = generate_battle_plan(market_df, macro_news)
-    st.info(plan_text)
+# ── Manual Refresh Button (works instantly at 4AM pre-market)
+col_refresh = st.columns([7, 1])
+with col_refresh[1]:
+    if st.button("🔄 Refresh Now", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
 
-with col_vitals:
-    st.subheader("📡 Vitals")
-    vix_val = market_df[market_df['Symbol'] == "^VIX"]['Price'].iloc[0] if not market_df[market_df['Symbol'] == "^VIX"].empty else 20
-    vol_pulse = "🔴 High" if vix_val > 22 else "🟢 Low" if vix_val < 15 else "🟡 Med"
-    st.metric("Volatility Pulse", vol_pulse)
-    top_gap = market_df.nlargest(1, 'Gap %')['Symbol'].iloc[0] if not market_df.empty else "N/A"
-    st.metric("Top Gapper", top_gap)
-
-st.sidebar.metric("VIX (Fear Index)", f"{vix_val:.2f}", delta="Risk On" if vix_val < 20 else "Volatility")
-
-# ────────────────────────────────────────────────
-#  TABS
-# ────────────────────────────────────────────────
-tabs = st.tabs([
-    "📊 Market Overview",
-    "🎯 Trading Themes",
-    "📊 GEX / Gamma",
-    "🐳 Options PCR",
-    "📊 Analyst Ratings",
-    "🔍 Regime + Alpha Delta",
-    "💼 Paper Trading"
+tab_overview, tab_sectors, tab_themes, tab_rel_strength, tab_gex, tab_options, tab_earnings, tab_analyst, tab_macro, tab_extremes, tab_news, tab_bias = st.tabs([
+    "📈 Market Overview", "🔥 Alpha Sectors", "🎯 Trading Themes", "⚖️ Relative Strength",
+    "📊 GEX + Gamma Flip", "🐳 Options", "🎯 Earnings", "📊 Analyst Ratings (Yahoo)",
+    "🌍 Macro News", "🔥 ATH/ATL Plays", "📰 High-Impact News", "🔍 Bias & Regime"
 ])
 
-# TAB 0
-with tabs[0]:
-    st.subheader("🗝️ Key Indices & Mag7")
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        indices = market_df[market_df['Symbol'].isin(GLOBAL_TICKERS.values())]
-        st.dataframe(indices.style.background_gradient(cmap='RdYlGn', subset=['Change %', 'Gap %']), hide_index=True, use_container_width=True)
-    with col2:
-        mag7 = market_df[market_df['Symbol'].isin(MAG7_TICKERS.values())].sort_values('Change %', ascending=False)
-        st.dataframe(mag7[['Asset', 'Price', 'Change %', 'Gap %']].style.background_gradient(cmap='RdYlGn', subset=['Change %']), hide_index=True, use_container_width=True)
+with tab_overview:
+    st.subheader("🗝️ Key Indices & Futures")
+    key_assets = ["VIX", "ES (S&P 500 Fut)", "NQ (Nasdaq Fut)", "YM (Dow Fut)", "RTY (Russell 2000)", "SPY", "QQQ", "S&P 500"]
+    key_df = market_df[market_df['Asset'].isin(key_assets)][['Asset', 'Price', 'Gap %', 'Change %', 'RVOL']].round(2)
+    st.dataframe(key_df.style.background_gradient(cmap='RdYlGn', subset=['Change %', 'Gap %', 'RVOL']), hide_index=True, use_container_width=True)
 
-# TAB 1
-with tabs[1]:
-    cols = st.columns(len(TRADING_THEMES))
-    for i, (name, syms) in enumerate(TRADING_THEMES.items()):
-        with cols[i]:
-            st.markdown(f"**{name}**")
-            theme_df = market_df[market_df['Symbol'].isin(syms)]
-            st.dataframe(theme_df[['Asset', 'Price', 'Change %']].style.background_gradient(cmap='RdYlGn'), hide_index=True, use_container_width=True)
+    st.subheader("🚀 Magnificent 7")
+    mag7_df = market_df[market_df['Asset'].isin(MAG7_TICKERS.keys())].copy().sort_values('Change %', ascending=False)
+    spy_change = mag7_df[mag7_df['Asset'] == "SPY"]['Change %'].iloc[0] if not mag7_df[mag7_df['Asset'] == "SPY"].empty else 0
+    mag7_df['vs SPY (%)'] = (mag7_df['Change %'] - spy_change).round(2)
+    st.dataframe(mag7_df[['Asset', 'Price', 'Change %', 'vs SPY (%)', 'RVOL']].round(2)
+                 .style.background_gradient(cmap='RdYlGn', subset=['Change %', 'vs SPY (%)', 'RVOL']),
+                 hide_index=True, use_container_width=True)
 
-# TAB 2
-with tabs[2]:
-    user_ticker = st.text_input("GEX Ticker", value="SPY").upper().strip()
+with tab_sectors:
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.subheader("Major ETFs")
+        sect_data = market_df[market_df['Asset'].isin(SECTOR_TICKERS.keys())].copy()
+        st.dataframe(sect_data[['Asset', 'Price', 'Change %', 'RVOL']]
+                     .style.background_gradient(cmap='RdYlGn', subset=['Change %', 'RVOL']),
+                     hide_index=True, use_container_width=True)
+    with col_b:
+        st.subheader("☁️ Neo Clouds (AI Infrastructure)")
+        neo_data = market_df[market_df['Asset'].isin(NEO_CLOUD_TICKERS.keys())].copy()
+        st.dataframe(neo_data[['Asset', 'Price', 'Change %', 'RVOL']]
+                     .style.background_gradient(cmap='RdYlGn', subset=['Change %', 'RVOL']),
+                     hide_index=True, use_container_width=True)
+
+with tab_themes:
+    st.subheader("🎯 Active Trading Themes")
+    st.caption("Categorized buckets to identify leading/lagging sectors at the open.")
+    cols = st.columns(2)
+    for i, (theme, tickers) in enumerate(TRADING_THEMES.items()):
+        with cols[i % 2]:
+            st.markdown(f"#### {theme}")
+            theme_df = market_df[market_df['Symbol'].isin(tickers)].copy()
+            if not theme_df.empty:
+                theme_df = theme_df.sort_values('Change %', ascending=False)
+                st.dataframe(
+                    theme_df[['Asset', 'Price', 'Change %', 'RVOL']]
+                    .style.background_gradient(cmap='RdYlGn', subset=['Change %'])
+                    .format({"Price": "${:,.2f}", "Change %": "{:+.2f}%", "RVOL": "{:.2f}x"}),
+                    hide_index=True,
+                    use_container_width=True
+                )
+            else:
+                st.warning(f"No data for {theme}")
+
+with tab_rel_strength:
+    st.subheader("⚖️ Sector Strength vs SPY")
+    st.caption("5-Day Cumulative Performance normalized to 0%")
+    try:
+        benchmark = "SPY"
+        sector_symbols = list(SECTOR_TICKERS.values())
+        plot_df = hist_data['Close'][[benchmark] + sector_symbols].dropna(how='all')
+        normalized_df = (plot_df / plot_df.iloc[0] - 1) * 100
+        
+        melt_df = normalized_df.reset_index()
+        date_col = melt_df.columns[0]
+        melt_df = melt_df.rename(columns={date_col: 'Date'})
+        
+        fig = px.line(melt_df.melt(id_vars='Date', var_name='Ticker', value_name='Perf %'),
+                      x='Date', y='Perf %', color='Ticker', template="plotly_dark", height=500)
+        fig.update_traces(patch={"line": {"width": 4, "dash": "dot"}}, selector={"legendgroup": "SPY"})
+        st.plotly_chart(fig, use_container_width=True)
+        
+        st.write("### Alpha Delta (Current vs SPY)")
+        current_perf = normalized_df.iloc[-1]
+        rel_perf = (current_perf - current_perf[benchmark]).round(2).reset_index()
+        rel_perf.columns = ['Ticker', 'vs SPY (%)']
+        st.dataframe(rel_perf.sort_values('vs SPY (%)', ascending=False).style.background_gradient(cmap='RdYlGn'),
+                     hide_index=True, use_container_width=True)
+    except Exception as e: 
+        st.error(f"RS Error: {e}")
+        st.info("Data may still be loading — refresh in 5 seconds.")
+
+    st.subheader("⚖️ Mag7 Strength vs QQQ")
+    st.caption("5-Day Cumulative Performance normalized to 0%")
+    try:
+        benchmark = "QQQ"
+        mag7_symbols = list(MAG7_TICKERS.values())
+        plot_df = hist_data['Close'][[benchmark] + mag7_symbols].dropna(how='all')
+        normalized_df = (plot_df / plot_df.iloc[0] - 1) * 100
+        
+        melt_df = normalized_df.reset_index()
+        date_col = melt_df.columns[0]
+        melt_df = melt_df.rename(columns={date_col: 'Date'})
+        
+        fig = px.line(melt_df.melt(id_vars='Date', var_name='Ticker', value_name='Perf %'),
+                      x='Date', y='Perf %', color='Ticker', template="plotly_dark", height=500)
+        fig.update_traces(patch={"line": {"width": 4, "dash": "dot"}}, selector={"legendgroup": "QQQ"})
+        st.plotly_chart(fig, use_container_width=True)
+        
+        st.write("### Alpha Delta (Current vs QQQ)")
+        current_perf = normalized_df.iloc[-1]
+        rel_perf = (current_perf - current_perf[benchmark]).round(2).reset_index()
+        rel_perf.columns = ['Ticker', 'vs QQQ (%)']
+        st.dataframe(rel_perf.sort_values('vs QQQ (%)', ascending=False).style.background_gradient(cmap='RdYlGn'),
+                     hide_index=True, use_container_width=True)
+    except Exception as e: 
+        st.error(f"Mag7 RS Error: {e}")
+        st.info("Data may still be loading — refresh in 5 seconds.")
+
+with tab_gex:
+    st.subheader("📊 Gamma Exposure (GEX) + Gamma Flip Level")
+    st.caption("Front 3 expirations • Green = Long Gamma (stabilizing) • Red = Short Gamma (amplifying) • Yellow line = **Gamma Flip**")
+    
+    user_ticker = st.text_input("Enter Ticker for GEX Analysis", value="SPY").upper().strip()
+    
     if user_ticker:
         try:
             tk = yf.Ticker(user_ticker)
-            spot = tk.history(period="1d")['Close'].iloc[-1]
-            exp = tk.options[0]
-            c = tk.option_chain(exp).calls.assign(type='call')
-            p = tk.option_chain(exp).puts.assign(type='put')
-            df_g = pd.concat([c, p])
-            df_g['GEX'] = calc_gamma_vectorized(spot, df_g['strike'], 5/365, df_g['impliedVolatility'], 0.04, 0.01, df_g['type'], df_g['openInterest'])
-            
-            fig = px.bar(df_g.groupby('strike')['GEX'].sum().reset_index(), x='strike', y='GEX', title=f"{user_ticker} Gamma Exposure")
-            fig.add_vline(x=spot, line_dash="dash", line_color="white", annotation_text="SPOT")
-            st.plotly_chart(fig, use_container_width=True)
-        except Exception as e:
-            st.error(f"Options data unavailable: {e}")
-
-# TAB 3
-with tabs[3]:
-    st.subheader("🐳 Put/Call Volume Ratio")
-    st.dataframe(get_pcr_data().style.background_gradient(subset=['PCR'], cmap='RdYlGn_r'), hide_index=True, use_container_width=True)
-
-# TAB 4
-with tabs[4]:
-    st.subheader("📊 Analyst Ratings")
-    analyst_df = get_analyst_ratings()
-    if not analyst_df.empty:
-        st.dataframe(analyst_df.style.background_gradient(cmap='RdYlGn', subset=['Upside %']), hide_index=True, use_container_width=True)
-
-# TAB 5
-with tabs[5]:
-    st.subheader("🔍 Market Regime Analysis")
-    def get_bias(chg):
-        if chg > 1.5: return "🚀 Strong Bull"
-        if chg < -1.5: return "💥 Strong Bear"
-        return "⚖️ Neutral / Chop"
-    market_df['Regime'] = market_df['Change %'].apply(get_bias)
-    st.dataframe(market_df[['Asset', 'Price', 'Change %', 'Gap %', 'Regime']].style.background_gradient(cmap='RdYlGn', subset=['Change %']), hide_index=True, use_container_width=True)
-
-    st.markdown("---")
-    st.subheader("⚖️ Relative Strength vs SPY (Alpha Delta)")
-    if not market_df.empty:
-        try:
-            spy_change = market_df[market_df['Symbol'] == 'SPY']['Change %'].iloc[0]
-            rs_data = []
-            for theme, symbols in TRADING_THEMES.items():
-                for sym in symbols:
-                    row = market_df[market_df['Symbol'] == sym]
-                    if not row.empty:
-                        stock_chg = row['Change %'].iloc[0]
-                        rs_data.append({
-                            "Theme": theme.split()[-1],
-                            "Ticker": sym,
-                            "Alpha Delta": round(stock_chg - spy_change, 2),
-                            "Actual %": round(stock_chg, 2)
-                        })
-            rs_df = pd.DataFrame(rs_data)
-            fig_rs = px.bar(rs_df.sort_values("Alpha Delta", ascending=False), x="Ticker", y="Alpha Delta",
-                            color="Alpha Delta", text="Alpha Delta", color_continuous_scale="RdYlGn",
-                            title=f"Alpha Delta vs SPY ({spy_change:+.2f}%)")
-            fig_rs.add_hline(y=0, line_dash="dash", line_color="white")
-            st.plotly_chart(fig_rs, use_container_width=True)
-
-            st.markdown("### 🏆 Top 5 Momentum Leaders")
-            top_leaders = rs_df.nlargest(5, "Alpha Delta")
-            cols = st.columns(5)
-            for idx, leader in enumerate(top_leaders.to_dict('records')):
-                with cols[idx]:
-                    st.metric(label=leader['Ticker'], value=f"{leader['Actual %']}%", delta=f"{leader['Alpha Delta']}% vs SPY")
-        except Exception as e:
-            st.warning(f"RS data syncing... {e}")
-
-# TAB 6 — PAPER TRADING (FIXED)
-with tabs[6]:
-    st.subheader("💼 Paper Trading Simulator")
-
-    if 'cash' not in st.session_state:
-        st.session_state.cash = 100000.0
-    if 'portfolio' not in st.session_state:
-        st.session_state.portfolio = {}
-
-    def execute_trade(symbol, qty, price, side):
-        cost = qty * price
-        if side == "BUY":
-            if cost > st.session_state.cash:
-                st.error("❌ Insufficient Funds!")
-                return
-            st.session_state.cash -= cost
-            pos = st.session_state.portfolio.get(symbol, {'qty': 0, 'avg_price': 0.0})
-            total_qty = pos['qty'] + qty
-            new_avg = ((pos['qty'] * pos['avg_price']) + cost) / total_qty if total_qty > 0 else price
-            st.session_state.portfolio[symbol] = {'qty': total_qty, 'avg_price': new_avg}
-            st.success(f"✅ Bought {qty} {symbol} @ ${price:.2f}")
-        else:
-            pos = st.session_state.portfolio.get(symbol, {'qty': 0})
-            if pos['qty'] < qty:
-                st.error("❌ Not enough shares!")
-                return
-            st.session_state.cash += cost
-            st.session_state.portfolio[symbol]['qty'] -= qty
-            if st.session_state.portfolio[symbol]['qty'] == 0:
-                del st.session_state.portfolio[symbol]
-            st.success(f"✅ Sold {qty} {symbol} @ ${price:.2f}")
-
-    # Portfolio Value
-    total_value = st.session_state.cash
-    portfolio_rows = []
-    for sym, data in st.session_state.portfolio.items():
-        live_row = market_df[market_df['Symbol'] == sym]
-        live_price = live_row['Price'].iloc[0] if not live_row.empty else data['avg_price']
-        value = data['qty'] * live_price
-        pnl = (live_price - data['avg_price']) * data['qty']
-        total_value += value
-        portfolio_rows.append({
-            "Ticker": sym, "Qty": data['qty'], "Avg Price": f"${data['avg_price']:.2f}",
-            "Live Price": f"${live_price:.2f}", "P&L $": round(pnl, 2), "P&L %": f"{((live_price/data['avg_price']-1)*100):+.2f}%"
-        })
-
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Cash", f"${st.session_state.cash:,.2f}")
-    c2.metric("Total Equity", f"${total_value:,.2f}", f"{(total_value - 100000):+,.2f}")   # ← FIXED: no space after comma
-    c3.metric("Positions", len(st.session_state.portfolio))
-
-    st.markdown("---")
-    t1, t2, t3, t4 = st.columns([2, 1, 1, 1])
-    with t1:
-        trade_sym = st.selectbox("Ticker", options=ALL_SYMBOLS, key="trade_sym")
-    with t2:
-        trade_qty = st.number_input("Qty", min_value=1, value=10, key="trade_qty")
-    curr_price = market_df[market_df['Symbol'] == trade_sym]['Price'].iloc[0] if not market_df[market_df['Symbol'] == trade_sym].empty else 0
-    with t3:
-        if st.button("BUY", type="primary", use_container_width=True):
-            execute_trade(trade_sym, trade_qty, curr_price, "BUY")
-            st.rerun()
-    with t4:
-        if st.button("SELL", use_container_width=True):
-            execute_trade(trade_sym, trade_qty, curr_price, "SELL")
-            st.rerun()
-
-    if portfolio_rows:
-        st.dataframe(pd.DataFrame(portfolio_rows).style.background_gradient(cmap='RdYlGn', subset=['P&L $']), hide_index=True, use_container_width=True)
-
-# ────────────────────────────────────────────────
-#  LIVE ALERTS
-# ────────────────────────────────────────────────
-if 'alert_log' not in st.session_state:
-    st.session_state.alert_log = []
-
-def trigger_alert(msg, icon="🔔"):
-    now = datetime.datetime.now(pytz.timezone('US/Eastern')).strftime("%H:%M:%S")
-    alert = f"[{now}] {icon} {msg}"
-    st.session_state.alert_log = [alert] + st.session_state.alert_log[:9]
-
-def process_live_alerts(df, intra):
-    tz = pytz.timezone('US/Eastern')
-    today_str = datetime.datetime.now(tz).strftime('%Y-%m-%d')
-    for _, row in df.iterrows():
-        sym = row['Symbol']
-        price = row['Price']
-        try:
-            today_data = intra.xs(sym, level=1, axis=1).dropna()
-            today_data = today_data[today_data.index.strftime('%Y-%m-%d') == today_str]
-            if len(today_data) >= 3:
-                v_sum = today_data['Volume'].sum()
-                pv_sum = (today_data['Close'] * today_data['Volume']).sum()
-                vwap = pv_sum / v_sum if v_sum > 0 else 0
-                prev_price = today_data['Close'].iloc[-2]
-                if prev_price < vwap and price > vwap:
-                    trigger_alert(f"{sym} 🚀 CROSSING ABOVE VWAP @ ${price:.2f}", "🚀")
-                elif prev_price > vwap and price < vwap:
-                    trigger_alert(f"{sym} ⚠️ SLICING BELOW VWAP @ ${price:.2f}", "⚠️")
-        except:
-            pass
-        if row['RVOL'] > 3.5:
-            trigger_alert(f"{sym} 🔥 VOLUME EXPLOSION: {row['RVOL']:.1f}x Avg!", "🔥")
-
-with st.sidebar:
-    st.markdown("### 🎰 LIVE TRADE ALERTS")
-    process_live_alerts(market_df, intra_data)
-    with st.container(height=320, border=True):
-        if not st.session_state.alert_log:
-            st.caption("Waiting for triggers...")
-        for alert in st.session_state.alert_log:
-            if "🚀" in alert or "EXPLOSION" in alert:
-                st.success(alert)
-            elif "⚠️" in alert:
-                st.warning(alert)
+            options = tk.options
+            if not options:
+                st.warning("No options data found.")
             else:
-                st.info(alert)
-    if st.button("Clear Alerts"):
-        st.session_state.alert_log = []
-        st.rerun()
+                spot = round(tk.history(period="1d")['Close'].iloc[-1], 2)
+                
+                all_chains = []
+                for exp in options[:3]:
+                    ch = tk.option_chain(exp)
+                    all_chains.extend([
+                        ch.calls.assign(type='call', exp=exp),
+                        ch.puts.assign(type='put', exp=exp)
+                    ])
+                df_g = pd.concat(all_chains, ignore_index=True)
+                
+                df_g['impliedVolatility'] = df_g['impliedVolatility'].fillna(0.01)
+                df_g['impliedVolatility'] = np.clip(df_g['impliedVolatility'], 0.01, 3.0)
+                df_g['openInterest'] = df_g['openInterest'].fillna(0)
+                
+                now = datetime.datetime.now(datetime.timezone.utc)
+                exp_datetime = pd.to_datetime(df_g['exp']).dt.tz_localize('UTC') + pd.Timedelta(hours=16)
+                df_g['dte'] = (exp_datetime - now).dt.total_seconds() / (365 * 24 * 3600)
+                df_g['dte'] = np.maximum(df_g['dte'], 1/365.0)
+                
+                df_g['GEX'] = calc_gamma_vectorized(
+                    spot, df_g['strike'].values, df_g['dte'].values,
+                    df_g['impliedVolatility'].values, 0.04, 0.01,
+                    df_g['type'].values, df_g['openInterest'].values
+                )
+                
+                df_agg = (df_g.groupby('strike')['GEX'].sum() / 1e6).sort_index()
+                
+                strikes = np.asarray(df_agg.index)
+                gex_vals = np.asarray(df_agg.values)
+                
+                flip_level = spot
+                sign_changes = np.where(np.sign(gex_vals[:-1]) != np.sign(gex_vals[1:]))[0]
+                if len(sign_changes) > 0:
+                    i = sign_changes[0]
+                    x1, y1 = strikes[i], gex_vals[i]
+                    x2, y2 = strikes[i+1], gex_vals[i+1]
+                    flip_level = x1 - y1 * (x2 - x1) / (y2 - y1) if y2 != y1 else x1
+                flip_level = round(flip_level)
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric(
+                        label="🔄 **Gamma Flip Level**",
+                        value=f"${flip_level:,}",
+                        delta=f"Spot is {((spot - flip_level)/flip_level*100):+.1f}% above flip"
+                    )
+                with col2:
+                    total_gex = round(df_agg.sum(), 1)
+                    st.metric(
+                        label="Net GEX",
+                        value=f"{total_gex}M",
+                        delta="🟢 Long Gamma (pinning likely)" if total_gex > 0 else "🔴 Short Gamma (volatile)"
+                    )
+                with col3:
+                    st.metric("Current Spot", f"${spot:,.2f}")
+                
+                st.caption("**Gamma Flip** = first strike where net GEX changes sign. "
+                          "Above flip = dealers long gamma (dampens moves). Below = short gamma (amplifies moves).")
+                
+                fig = go.Figure()
+                fig.add_trace(go.Bar(
+                    x=df_agg.index,
+                    y=df_agg.values,
+                    marker_color=['#00ff88' if x > 0 else '#ff4444' for x in df_agg.values],
+                    name="GEX ($M)"
+                ))
+                fig.add_vline(x=spot, line_dash="dash", line_color="white",
+                              annotation_text=f"Spot ${spot}", annotation_position="top")
+                fig.add_vline(x=flip_level, line_dash="dot", line_color="#ffd700", line_width=3,
+                              annotation_text=f"🔄 GAMMA FLIP ${flip_level}",
+                              annotation_position="bottom right" if flip_level < spot else "top left")
+                
+                fig.update_layout(
+                    template="plotly_dark",
+                    title=f"{user_ticker} Net Gamma Exposure + Gamma Flip Level",
+                    height=560,
+                    xaxis_title="Strike Price",
+                    yaxis_title="Gamma Exposure ($ Millions)",
+                    hovermode="x unified"
+                )
+                st.plotly_chart(fig, use_container_width=True)
+                
+        except Exception as e:
+            st.error(f"GEX Error: {e}")
+            st.info("Try SPY, QQQ, NVDA, TSLA — most liquid names work best.")
+
+with tab_options:
+    st.subheader("🐳 Put/Call Volume Ratio")
+    pcr_df = get_pcr_data()
+    if not pcr_df.empty:
+        st.dataframe(pcr_df.style.background_gradient(subset=['PCR'], cmap='RdYlGn_r'), hide_index=True, use_container_width=True)
+
+with tab_earnings:
+    st.subheader("🎯 Earnings Calendar")
+    all_events = get_yesterdays_earnings() + get_todays_earnings() + get_tomorrows_earnings()
+    if all_events:
+        df = pd.DataFrame(all_events)
+        def highlight_beats(val):
+            if val == "✅ Beat": return 'background-color: #00cc66; color: black; font-weight: bold;'
+            if val == "❌ Miss": return 'background-color: #ff4d4d; color: white; font-weight: bold;'
+            return ''
+        st.dataframe(df.style.applymap(highlight_beats, subset=['EPS Beat', 'Rev Beat']), hide_index=True, use_container_width=True)
+
+with tab_analyst:
+    st.subheader("📊 Analyst Ratings & Price Targets (Yahoo Finance)")
+    st.caption("Live consensus, targets & analyst count • Updated every 30 min • No scraping")
+    
+    analyst_df = get_analyst_ratings()
+    
+    if not analyst_df.empty:
+        analyst_df = analyst_df.dropna(subset=['Bull Score']).sort_values('Bull Score', ascending=False)
+        
+        def rating_color(val):
+            if "Strong Buy" in val or "Buy" in val: 
+                return 'background-color: #00cc66; color: black; font-weight: bold;'
+            if "Hold" in val: 
+                return 'background-color: #ffcc66; color: black;'
+            if "Sell" in val: 
+                return 'background-color: #ff6666; color: white; font-weight: bold;'
+            return ''
+        
+        st.dataframe(
+            analyst_df[[
+                "Asset", "Symbol", "Consensus", "Bull Score", "Target Mean", 
+                "Target High", "Target Low", "Current Price", "Upside %", "Analyst Count"
+            ]]
+            .style
+            .applymap(rating_color, subset=['Consensus'])
+            .background_gradient(cmap='RdYlGn', subset=['Upside %', 'Bull Score'])
+            .format({
+                "Target Mean": "${:,.2f}",
+                "Target High": "${:,.2f}",
+                "Target Low": "${:,.2f}",
+                "Current Price": "${:,.2f}",
+                "Upside %": "{:+.1f}%"
+            }),
+            hide_index=True,
+            use_container_width=True
+        )
+        
+        st.caption("**Target Range** shown as High / Low. **Bull Score** 5 = Strong Buy → 1 = Strong Sell")
+    else:
+        st.info("Fetching latest analyst consensus from Yahoo Finance...")
+
+with tab_macro:
+    st.subheader("🌍 Macro & Market-Moving News")
+    st.caption("High-impact news affecting the broader market • Fed, Trump, geopolitics, economic data")
+    
+    macro_news = get_macro_news()
+    
+    if macro_news:
+        total_score = 0
+        trump_news = [item for item in macro_news if any(k in item.get('Title','').lower() for k in ['trump', 'president', 'white house', 'tariff', 'election', 'fed', 'inflation'])]
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("### 📈 All Macro Headlines")
+            for item in macro_news[:15]:
+                label, score = get_sentiment_score(item.get('Title', ''))
+                total_score += score
+                with st.expander(f"{label} | {item.get('Title')[:85]}{'...' if len(item.get('Title','')) > 85 else ''}"):
+                    st.write(f"**Source:** {item.get('Source')} | {item.get('Date')}")
+                    st.write(f"[🔗 Read]({item.get('URL')})")
+        
+        with col2:
+            st.markdown("### 🇺🇸 Trump / Political Impact")
+            if trump_news:
+                for item in trump_news[:10]:
+                    label, score = get_sentiment_score(item.get('Title', ''))
+                    with st.expander(f"{label} | {item.get('Title')[:80]}{'...' if len(item.get('Title','')) > 80 else ''}"):
+                        st.write(f"**Source:** {item.get('Source')} | {item.get('Date')}")
+                        st.write(f"[🔗 Read]({item.get('URL')})")
+            else:
+                st.info("No major Trump-related headlines right now")
+        
+        st.sidebar.metric("Macro Sentiment Pulse", total_score,
+                         delta="Bullish" if total_score >= 0 else "Bearish")
+    else:
+        st.info("Fetching macro news from Finviz...")
+
+with tab_extremes:
+    st.info("ATH/ATL scanner – coming soon")
 
 # ────────────────────────────────────────────────
-#  AUTO REFRESH
+#  HIGH-IMPACT NEWS TAB
 # ────────────────────────────────────────────────
-st_autorefresh(interval=25000, key="live_refresh")
+with tab_news:
+    st.subheader("🔥 Hot Mag7 + SPY/QQQ News")
+    st.caption("**Market-moving** news for the most important assets (AAPL, MSFT, NVDA, AMZN, GOOGL, META, TSLA, SPY, QQQ) • High-impact filter • Updated live")
+
+    hot_df = get_mag7_hot_news()
+    
+    if not hot_df.empty:
+        for _, row in hot_df.iterrows():
+            impact_emoji = "🔥" if row['Impact'] >= 5 else "⚡" if row['Impact'] >= 3 else "📈"
+            with st.expander(f"{impact_emoji} {row['Sentiment']} | {row['Asset']} | {row['Title'][:92]}{'...' if len(row['Title']) > 92 else ''} • {row['Time']}"):
+                st.write(f"**Source:** {row['Source']} | Impact Score: {row['Impact']}")
+                st.write(f"[🔗 Read full story]({row['URL']})")
+    else:
+        st.info("Fetching hot Mag7 + SPY/QQQ news from Finviz...")
+
+    st.markdown("---")
+
+    st.subheader("📰 High-Impact Theme Stocks News")
+    st.caption("Filtered for **market-moving** events across all trading themes • Earnings, Analyst Actions, M&A, Lawsuits, Major Moves")
+
+    news_df = get_theme_stock_news()
+    
+    if not news_df.empty:
+        total_score = news_df['Score'].sum()
+        st.sidebar.metric("Theme Sentiment Pulse", total_score,
+                         delta="Positive" if total_score >= 0 else "Negative")
+        
+        for _, row in news_df.iterrows():
+            impact_emoji = "🔥" if row['Impact'] >= 5 else "⚡" if row['Impact'] >= 3 else "📈"
+            with st.expander(f"{impact_emoji} {row['Sentiment']} | {row['Asset']} | {row['Title'][:92]}{'...' if len(row['Title']) > 92 else ''} • {row['Time']}"):
+                st.write(f"**Source:** {row['Source']} | Impact Score: {row['Impact']}")
+                st.write(f"[🔗 Read full story]({row['URL']})")
+    else:
+        st.info("Fetching high-impact theme news from Finviz...")
+
+with tab_bias:
+    st.subheader("🔍 Market Bias & Gap Analysis")
+    st.caption("Bullish / Bearish / Chop regime based on **today's price vs yesterday close** • Gap % = (open - yesterday close)")
+
+    key_assets = ["VIX", "ES (S&P 500 Fut)", "NQ (Nasdaq Fut)", "YM (Dow Fut)", 
+                  "RTY (Russell 2000)", "SPY", "QQQ", "S&P 500"]
+    bias_df = market_df[market_df['Asset'].isin(key_assets + list(MAG7_TICKERS.keys()))].copy()
+    
+    def get_bias(chg):
+        if chg >= 1.8:   return "🚀 Strong Bullish"
+        elif chg >= 0.6: return "🟢 Bullish"
+        elif chg >= -0.6:return "⚖️ Chop / Neutral"
+        elif chg >= -1.8:return "🔴 Bearish"
+        else:            return "💥 Strong Bearish"
+    
+    bias_df['Bias'] = bias_df['Change %'].apply(get_bias)
+    
+    def style_bias(val):
+        if "Strong Bullish" in val or "Bullish" in val:
+            return 'background-color: #00cc66; color: black; font-weight: bold'
+        if "Strong Bearish" in val or "Bearish" in val:
+            return 'background-color: #ff4444; color: white; font-weight: bold'
+        if "Chop" in val:
+            return 'background-color: #555555; color: white'
+        return ''
+    
+    st.dataframe(
+        bias_df[['Asset', 'Price', 'Gap %', 'Change %', 'Bias', 'RVOL']].round(2)
+        .style
+        .applymap(style_bias, subset=['Bias'])
+        .background_gradient(cmap='RdYlGn', subset=['Change %', 'Gap %'])
+        .format({"Gap %": "{:+.2f}%", "Change %": "{:+.2f}%", "RVOL": "{:.2f}x"}),
+        hide_index=True,
+        use_container_width=True
+    )
+    
+    st.info("**Regime Logic**: >1.8% = Strong Bull | 0.6–1.8% = Bull | ±0.6% = Chop | -1.8 to -0.6 = Bear | <-1.8% = Strong Bear")
+
+st_autorefresh(interval=30000, key="global_refresh")   # 30-second live refresh (was 45s)
