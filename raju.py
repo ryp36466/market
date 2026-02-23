@@ -21,7 +21,7 @@ st.set_page_config(page_title="Alpha Terminal Pro", page_icon="🏛️", layout=
 FINNHUB_KEY = st.secrets.get("FINNHUB_API_KEY", "d6au4n9r01qnr27itio0d6au4n9r01qnr27itiog")
 
 # ────────────────────────────────────────────────
-#  2. TICKER DEFINITIONS & CLEANING
+#  2. TICKER DEFINITIONS
 # ────────────────────────────────────────────────
 GLOBAL_TICKERS = {
     "VIX": "^VIX", "ES Fut": "ES=F", "NQ Fut": "NQ=F", "RTY Fut": "RTY=F",
@@ -39,12 +39,11 @@ TRADING_THEMES = {
 MAG7_TICKERS = ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA"]
 DEFAULT_NEWS_SYMS = ["SPY", "NVDA", "TSLA", "BTC-USD", "SMH", "QQQ"]
 
-# Integrity Check
 all_raw = list(GLOBAL_TICKERS.values()) + [s for t in TRADING_THEMES.values() for s in t] + MAG7_TICKERS + DEFAULT_NEWS_SYMS
 ALL_SYMBOLS = sorted(list(set([s.upper() for s in all_raw])))
 
 # ────────────────────────────────────────────────
-#  3. ASYNC ENGINE: QUOTES & NEWS
+#  3. ASYNC ENGINE
 # ────────────────────────────────────────────────
 async def fetch_async(session, url):
     try:
@@ -99,7 +98,7 @@ def fetch_terminal_data(news_focus):
     return pd.DataFrame(rows), n_data
 
 # ────────────────────────────────────────────────
-#  SENTIMENT HELPER
+#  SENTIMENT
 # ────────────────────────────────────────────────
 def get_sentiment_score(text):
     bull = ['upbeat','growth','surge','rally','beat','buy','bullish','expansion','profit','gain','positive','jump','upgrade','raise','strong','outperform','higher','rise','soar']
@@ -112,21 +111,23 @@ def get_sentiment_score(text):
     return "⚪ Neutral", 0
 
 # ────────────────────────────────────────────────
-#  FINVIZ NEWS SCRAPER (NEW TAB)
+#  FINVIZ 24-HOUR NEWS (STOCK SPECIFIC + TIME FILTER)
 # ────────────────────────────────────────────────
-def get_finviz_news():
+@st.cache_data(ttl=180)
+def get_finviz_news_24h():
     news = []
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-    
-    for sym in ALL_SYMBOLS[:15]:  # limit to avoid rate limiting
+    now_est = datetime.datetime.now(pytz.timezone('US/Eastern'))
+
+    for sym in ALL_SYMBOLS[:25]:   # limit to avoid too many requests
         try:
             url = f"https://finviz.com/quote.ashx?t={sym}"
             r = requests.get(url, headers=headers, timeout=8)
             soup = BeautifulSoup(r.text, "html.parser")
             table = soup.find("table", class_="news-table")
             if not table: continue
-            
-            for row in table.find_all("tr")[:6]:
+
+            for row in table.find_all("tr")[:10]:
                 tds = row.find_all("td")
                 if len(tds) < 2: continue
                 time_str = tds[0].text.strip()
@@ -135,7 +136,23 @@ def get_finviz_news():
                 title = a.text.strip()
                 link = a.get("href")
                 if not link.startswith("http"): link = "https://finviz.com" + link
-                
+
+                # Parse Finviz time and filter last 24 hours
+                try:
+                    if 'ago' in time_str:
+                        hours = int(time_str.split('h')[0].strip())
+                        parsed = now_est - datetime.timedelta(hours=hours)
+                    elif 'Yesterday' in time_str:
+                        parsed = now_est - datetime.timedelta(days=1)
+                    else:
+                        dt = datetime.datetime.strptime(time_str, '%I:%M %p')
+                        parsed = now_est.replace(hour=dt.hour, minute=dt.minute, second=0, microsecond=0)
+                    
+                    if (now_est - parsed).total_seconds() / 3600 > 24:
+                        continue  # skip older than 24h
+                except:
+                    continue
+
                 label, score = get_sentiment_score(title)
                 
                 news.append({
@@ -148,53 +165,50 @@ def get_finviz_news():
                 })
         except:
             continue
-    
+
     df = pd.DataFrame(news)
     if not df.empty:
-        df = df.sort_values("Score", ascending=False).drop_duplicates("Title").head(40)
+        df = df.sort_values("Score", ascending=False).drop_duplicates("Title").head(50)
     return df
 
 # ────────────────────────────────────────────────
 #  FETCH DATA
 # ────────────────────────────────────────────────
-news_focus = ["SPY", "NVDA", "TSLA", "BTC-USD", "SMH", "QQQ"]  # default focus
+news_focus = ["SPY", "NVDA", "TSLA", "BTC-USD", "SMH", "QQQ"]
 market_df, raw_news = fetch_terminal_data(news_focus)
-finviz_news_df = get_finviz_news()
+finviz_news_df = get_finviz_news_24h()
 
 # ────────────────────────────────────────────────
-#  SIDEBAR & SETTINGS
+#  SIDEBAR
 # ────────────────────────────────────────────────
 with st.sidebar:
-    st.header("⚙️ Terminal Settings")
-    news_focus = st.multiselect("News Focus (Finnhub)", options=ALL_SYMBOLS, default=news_focus)
+    st.header("⚙️ Settings")
+    news_focus = st.multiselect("Finnhub News Focus", options=ALL_SYMBOLS, default=news_focus)
     st.divider()
     if st.button("Refresh Terminal", use_container_width=True): 
         st.cache_data.clear()
         st.rerun()
 
 # ────────────────────────────────────────────────
-#  MAIN UI
+#  UI
 # ────────────────────────────────────────────────
 st.title("🏛️ Alpha Terminal Pro")
 
-# Top Stats
+# Top Stats (kept from your code)
 with st.container(border=True):
     c1, c2, c3 = st.columns([2, 1, 1])
     spy_chg = market_df[market_df['Symbol'] == 'SPY']['Change %'].values[0] if 'SPY' in market_df['Symbol'].values else 0
     with c1:
         st.subheader("📝 Morning Battle Plan")
         bias = "🚀 Risk-On" if spy_chg > 0.4 else "📉 Risk-Off" if spy_chg < -0.4 else "⚖️ Neutral"
-        st.markdown(f"**Bias:** {bias} | **Market Regime:** {'Trend Following' if abs(spy_chg) > 0.5 else 'Mean Reversion'}")
+        st.markdown(f"**Bias:** {bias}")
     with c2:
         vix = market_df[market_df['Symbol'] == '^VIX']['Price'].values[0] if '^VIX' in market_df['Symbol'].values else 20
-        st.metric("Volatility (VIX)", f"{vix:.2f}", delta="High Vol" if vix > 22 else "Low Vol", delta_color="inverse")
+        st.metric("VIX", f"{vix:.2f}")
     with c3:
-        st.metric("S&P 500 Change", f"{spy_chg}%", delta=f"{spy_chg}%")
+        st.metric("S&P 500", f"{spy_chg}%")
 
-# ────────────────────────────────────────────────
-#  TABS (with new Finviz tab)
-# ────────────────────────────────────────────────
-tabs = st.tabs(["📊 Overview", "🎯 Themes", "⚖️ Alpha Delta", "📰 Finnhub Live News", "📰 Finviz News Sentiment", "📊 GEX", "💼 Portfolio"])
+tabs = st.tabs(["📊 Overview", "🎯 Themes", "⚖️ Alpha Delta", "📰 Finnhub News", "📰 Finviz 24h News", "📊 GEX", "💼 Portfolio"])
 
 with tabs[0]:
     st.dataframe(market_df[market_df['Symbol'].isin(GLOBAL_TICKERS.values())].style.background_gradient(cmap='RdYlGn', subset=['Change %']), hide_index=True, use_container_width=True)
@@ -214,7 +228,7 @@ with tabs[2]:
     st.plotly_chart(fig_rs, use_container_width=True)
 
 with tabs[3]:
-    st.subheader("📰 Finnhub Live Wire")
+    st.subheader("📰 Finnhub Live Wire (Last 24h)")
     if raw_news:
         all_news = [item for sublist in raw_news if sublist for item in sublist]
         sorted_news = sorted(all_news, key=lambda x: x['datetime'], reverse=True)
@@ -225,17 +239,16 @@ with tabs[3]:
                 st.markdown(f"{sentiment} **{item['related']}** | {datetime.datetime.fromtimestamp(item['datetime']).strftime('%H:%M')} | *{item['source']}*")
                 st.markdown(f"#### [{item['headline']}]({item['url']})")
 
-# NEW FINVIZ TAB
 with tabs[4]:
-    st.subheader("📰 Finviz News Sentiment (Recent)")
-    st.caption("🟢 Positive • 🔴 Negative • ⚪ Neutral • Latest headlines from Finviz")
+    st.subheader("📰 Finviz 24-Hour News Sentiment")
+    st.caption("Stock-specific • Only news from the last 24 hours • Sorted by strongest sentiment")
     if not finviz_news_df.empty:
         for _, row in finviz_news_df.iterrows():
             emoji = "🟢" if "Bull" in row['Sentiment'] else "🔴" if "Bear" in row['Sentiment'] else "⚪"
-            with st.expander(f"{emoji} {row['Sentiment']} | {row['Asset']} | {row['Title'][:90]}{'...' if len(row['Title']) > 90 else ''} • {row['Time']}"):
+            with st.expander(f"{emoji} {row['Sentiment']} | {row['Asset']} | {row['Title'][:92]}{'...' if len(row['Title']) > 92 else ''} • {row['Time']}"):
                 st.write(f"[🔗 Read full story]({row['URL']})")
     else:
-        st.info("Fetching Finviz news...")
+        st.info("No news in last 24 hours or still loading...")
 
 with tabs[5]:
     st.subheader("Options Gamma Profile")
@@ -274,5 +287,4 @@ with tabs[6]:
     st.metric("Available Cash", f"${st.session_state.cash:,.2f}")
     st.write("**Current Positions:**", st.session_state.portfolio)
 
-# Pulse refresh
 st_autorefresh(interval=30000, key="terminal_refresh")
