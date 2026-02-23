@@ -2,8 +2,6 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-import re
-from streamlit_autorefresh import st_autorefresh
 import datetime
 import pytz
 import requests
@@ -12,6 +10,7 @@ from finvizfinance.news import News
 import plotly.express as px
 import plotly.graph_objects as go
 from scipy.stats import norm
+from streamlit_autorefresh import st_autorefresh
 
 # ────────────────────────────────────────────────
 #  PAGE CONFIG
@@ -81,7 +80,6 @@ for sublist in TRADING_THEMES.values():
 ALL_SYMBOLS = list(symbol_to_label.keys())
 ANALYST_SYMBOLS = sorted({sym for sublist in TRADING_THEMES.values() for sym in sublist})
 
-# NEW: Dedicated hot list for Mag7 + SPY + QQQ
 MAG7_HOT_SYMBOLS = list(MAG7_TICKERS.values()) + ["SPY", "QQQ"]
 
 HUGE_CAP_SYMBOLS = {
@@ -94,7 +92,7 @@ HUGE_CAP_SYMBOLS = {
 FINNHUB_API_KEY = "d6au4n9r01qnr27itio0d6au4n9r01qnr27itiog"
 
 # ────────────────────────────────────────────────
-#  HIGH-IMPACT NEWS FILTER (Professional Grade)
+#  HIGH-IMPACT NEWS FILTER
 # ────────────────────────────────────────────────
 HIGH_IMPACT_KEYWORDS = [
     "earnings", "eps", "revenue", "guidance", "outlook", "beat", "miss", "raised", "cut", "lowered", "hike",
@@ -130,15 +128,28 @@ def impact_score(title):
     return score
 
 # ────────────────────────────────────────────────
-#  FIXED DATA HELPERS - NOW RELIABLY LIVE DURING MARKET HOURS
+#  FIXED LIVE MARKET SNAPSHOT (Python 3.13 + Streamlit Cloud SAFE)
 # ────────────────────────────────────────────────
-
 @st.cache_data(ttl=10)
 def fetch_market_snapshot():
-    """FIXED: Uses Finnhub real-time quotes (fastest live) + yfinance 1m intraday fallback.
-    This solves the non-updating price issue in live/pre/post market."""
-    intra = yf.download(ALL_SYMBOLS, period="3d", interval="1m", prepost=True, progress=False, threads=True)
-    hist_data = yf.download(ALL_SYMBOLS, period="15d", interval="1d", progress=False)
+    """Fully fixed for live/pre/post-market prices. No more crashes."""
+    # threads=False → REQUIRED on Python 3.13 / Streamlit Cloud
+    intra = yf.download(
+        ALL_SYMBOLS, 
+        period="3d", 
+        interval="1m", 
+        prepost=True, 
+        progress=False, 
+        threads=False
+    )
+    
+    hist_data = yf.download(
+        ALL_SYMBOLS, 
+        period="15d", 
+        interval="1d", 
+        progress=False, 
+        threads=False
+    )
     
     rows = []
     tz = pytz.timezone('US/Eastern')
@@ -148,7 +159,7 @@ def fetch_market_snapshot():
     for sym in ALL_SYMBOLS:
         label = symbol_to_label.get(sym, sym)
         try:
-            # 1. Finnhub real-time quote (most accurate for live market)
+            # 1. Finnhub real-time quote (fastest)
             quote = None
             try:
                 f_sym = sym
@@ -158,7 +169,11 @@ def fetch_market_snapshot():
                     f_sym = sym.split('=')[0]
                 elif sym == "DX-Y.NYB":
                     f_sym = "DXY"
-                r = requests.get(f"https://finnhub.io/api/v1/quote?symbol={f_sym}&token={FINNHUB_API_KEY}", timeout=8)
+                
+                r = requests.get(
+                    f"https://finnhub.io/api/v1/quote?symbol={f_sym}&token={FINNHUB_API_KEY}", 
+                    timeout=8
+                )
                 r.raise_for_status()
                 d = r.json()
                 if d.get('c') and float(d['c']) > 0:
@@ -166,12 +181,12 @@ def fetch_market_snapshot():
             except:
                 pass
 
-            # 2. Price extraction
+            # 2. Price logic
             if quote and quote.get('c'):
                 price = float(quote['c'])
                 prev_close = float(quote.get('pc') or price)
             else:
-                # yfinance 1m fallback (excellent for futures, indices, extended hours)
+                # yfinance fallback
                 close_series = intra['Close'][sym].dropna()
                 if close_series.empty:
                     continue
@@ -191,7 +206,7 @@ def fetch_market_snapshot():
             except:
                 pass
 
-            # RVOL (today's volume vs average of prior full days)
+            # RVOL
             rvol = 1.0
             try:
                 mask = intra.index.strftime('%Y-%m-%d') == today_str
@@ -210,16 +225,21 @@ def fetch_market_snapshot():
                 "RVOL": round(rvol, 2)
             })
         except:
-            continue
+            continue  # skip any problematic ticker silently
+
     return pd.DataFrame(rows), intra, hist_data
 
-
+# ────────────────────────────────────────────────
+#  OTHER HELPERS (unchanged)
+# ────────────────────────────────────────────────
 def get_earnings_calendar_finnhub(date_str):
     url = f"https://finnhub.io/api/v1/calendar/earnings?from={date_str}&to={date_str}&token={FINNHUB_API_KEY}"
     try:
-        r = requests.get(url, timeout=10); r.raise_for_status()
+        r = requests.get(url, timeout=10)
+        r.raise_for_status()
         data = r.json()
-        filtered = []; fallback = []
+        filtered = []
+        fallback = []
         for item in data.get('earningsCalendar', []):
             symbol = item.get('symbol', '').upper()
             eps_est = item.get('epsEstimate')
@@ -247,13 +267,11 @@ def get_earnings_calendar_finnhub(date_str):
     except:
         return []
 
-
 def get_todays_earnings():
     today = datetime.datetime.now(pytz.timezone('US/Eastern')).date().strftime('%Y-%m-%d')
     data = get_earnings_calendar_finnhub(today)
     for d in data: d["When"] = "Today"
     return data
-
 
 def get_yesterdays_earnings():
     yest = (datetime.datetime.now(pytz.timezone('US/Eastern')) - datetime.timedelta(days=1)).date().strftime('%Y-%m-%d')
@@ -261,13 +279,11 @@ def get_yesterdays_earnings():
     for d in data: d["When"] = "Yesterday"
     return data
 
-
 def get_tomorrows_earnings():
     tom = (datetime.datetime.now(pytz.timezone('US/Eastern')) + datetime.timedelta(days=1)).date().strftime('%Y-%m-%d')
     data = get_earnings_calendar_finnhub(tom)
     for d in data: d["When"] = "Tomorrow"
     return data
-
 
 def get_pcr_data():
     targets = {**MAG7_TICKERS, "SPY": "SPY", "QQQ": "QQQ"}
@@ -289,7 +305,6 @@ def get_pcr_data():
             continue
     return pd.DataFrame(results)
 
-
 def get_sentiment_score(text):
     bull = ['upbeat','growth','surge','rally','beat','buy','bullish','expansion','profit','gain','positive','jump','beat','upgrade','raise','strong','outperform','higher','rise','soar']
     bear = ['slump','drop','fall','miss','sell','bearish','contraction','loss','negative','inflation','fear','risk','sink','downgrade','cut','weak','underperform','lower','decline','plunge']
@@ -300,7 +315,6 @@ def get_sentiment_score(text):
     if score < 0: return "🟠 Mild Bear", score
     return "⚪ Neutral", 0
 
-
 def calc_gamma_vectorized(S, K, T, v, r, q, types, OI):
     T = np.maximum(T, 1/365.0)
     v = np.maximum(v, 0.01)
@@ -309,10 +323,6 @@ def calc_gamma_vectorized(S, K, T, v, r, q, types, OI):
     val = gamma * OI * 100 * S
     return np.where(types == 'call', val, -val)
 
-
-# ────────────────────────────────────────────────
-#  HIGH-IMPACT THEME STOCK NEWS
-# ────────────────────────────────────────────────
 @st.cache_data(ttl=180)
 def get_theme_stock_news(max_stocks=30):
     news_items = []
@@ -364,10 +374,6 @@ def get_theme_stock_news(max_stocks=30):
         df = df.sort_values(by=["Impact", "Score"], ascending=False).drop_duplicates(subset=["Title"])
     return df
 
-
-# ────────────────────────────────────────────────
-#  HIGH-IMPACT MAG7 + SPY + QQQ HOT NEWS
-# ────────────────────────────────────────────────
 @st.cache_data(ttl=180)
 def get_mag7_hot_news():
     news_items = []
@@ -419,7 +425,6 @@ def get_mag7_hot_news():
         df = df.sort_values(by=["Impact", "Score"], ascending=False).drop_duplicates(subset=["Title"])
     return df
 
-
 @st.cache_data(ttl=300)
 def get_macro_news():
     try:
@@ -442,10 +447,6 @@ def get_macro_news():
         except:
             return []
 
-
-# ────────────────────────────────────────────────
-#  RELIABLE YAHOO ANALYST RATINGS
-# ────────────────────────────────────────────────
 @st.cache_data(ttl=1800)
 def get_analyst_ratings():
     ratings = []
@@ -490,7 +491,6 @@ def get_analyst_ratings():
     
     return pd.DataFrame(ratings)
 
-
 # ────────────────────────────────────────────────
 #  MAIN UI
 # ────────────────────────────────────────────────
@@ -501,7 +501,6 @@ time_now = datetime.datetime.now(est).strftime('%H:%M:%S')
 st.title("🏛️ Alpha Terminal Pro")
 st.caption(f"EST {time_now} | Data as of {datetime.date.today()} | Day-Trader Edition with Macro Pulse")
 
-# ── Manual Refresh Button (works instantly at 4AM pre-market)
 col_refresh = st.columns([7, 1])
 with col_refresh[1]:
     if st.button("🔄 Refresh Now", use_container_width=True):
@@ -589,7 +588,6 @@ with tab_rel_strength:
                      hide_index=True, use_container_width=True)
     except Exception as e: 
         st.error(f"RS Error: {e}")
-        st.info("Data may still be loading — refresh in 5 seconds.")
 
     st.subheader("⚖️ Mag7 Strength vs QQQ")
     st.caption("5-Day Cumulative Performance normalized to 0%")
@@ -616,7 +614,6 @@ with tab_rel_strength:
                      hide_index=True, use_container_width=True)
     except Exception as e: 
         st.error(f"Mag7 RS Error: {e}")
-        st.info("Data may still be loading — refresh in 5 seconds.")
 
 with tab_gex:
     st.subheader("📊 Gamma Exposure (GEX) + Gamma Flip Level")
@@ -716,7 +713,6 @@ with tab_gex:
                 
         except Exception as e:
             st.error(f"GEX Error: {e}")
-            st.info("Try SPY, QQQ, NVDA, TSLA — most liquid names work best.")
 
 with tab_options:
     st.subheader("🐳 Put/Call Volume Ratio")
@@ -737,7 +733,7 @@ with tab_earnings:
 
 with tab_analyst:
     st.subheader("📊 Analyst Ratings & Price Targets (Yahoo Finance)")
-    st.caption("Live consensus, targets & analyst count • Updated every 30 min • No scraping")
+    st.caption("Live consensus, targets & analyst count • Updated every 30 min")
     
     analyst_df = get_analyst_ratings()
     
@@ -771,14 +767,12 @@ with tab_analyst:
             hide_index=True,
             use_container_width=True
         )
-        
-        st.caption("**Target Range** shown as High / Low. **Bull Score** 5 = Strong Buy → 1 = Strong Sell")
     else:
-        st.info("Fetching latest analyst consensus from Yahoo Finance...")
+        st.info("Fetching latest analyst consensus...")
 
 with tab_macro:
     st.subheader("🌍 Macro & Market-Moving News")
-    st.caption("High-impact news affecting the broader market • Fed, Trump, geopolitics, economic data")
+    st.caption("High-impact news affecting the broader market")
     
     macro_news = get_macro_news()
     
@@ -811,17 +805,14 @@ with tab_macro:
         st.sidebar.metric("Macro Sentiment Pulse", total_score,
                          delta="Bullish" if total_score >= 0 else "Bearish")
     else:
-        st.info("Fetching macro news from Finviz...")
+        st.info("Fetching macro news...")
 
 with tab_extremes:
     st.info("ATH/ATL scanner – coming soon")
 
-# ────────────────────────────────────────────────
-#  HIGH-IMPACT NEWS TAB
-# ────────────────────────────────────────────────
 with tab_news:
     st.subheader("🔥 Hot Mag7 + SPY/QQQ News")
-    st.caption("**Market-moving** news for the most important assets (AAPL, MSFT, NVDA, AMZN, GOOGL, META, TSLA, SPY, QQQ) • High-impact filter • Updated live")
+    st.caption("Market-moving news for the most important assets • High-impact filter")
 
     hot_df = get_mag7_hot_news()
     
@@ -832,12 +823,12 @@ with tab_news:
                 st.write(f"**Source:** {row['Source']} | Impact Score: {row['Impact']}")
                 st.write(f"[🔗 Read full story]({row['URL']})")
     else:
-        st.info("Fetching hot Mag7 + SPY/QQQ news from Finviz...")
+        st.info("Fetching hot Mag7 + SPY/QQQ news...")
 
     st.markdown("---")
 
     st.subheader("📰 High-Impact Theme Stocks News")
-    st.caption("Filtered for **market-moving** events across all trading themes • Earnings, Analyst Actions, M&A, Lawsuits, Major Moves")
+    st.caption("Filtered for market-moving events across all trading themes")
 
     news_df = get_theme_stock_news()
     
@@ -852,11 +843,11 @@ with tab_news:
                 st.write(f"**Source:** {row['Source']} | Impact Score: {row['Impact']}")
                 st.write(f"[🔗 Read full story]({row['URL']})")
     else:
-        st.info("Fetching high-impact theme news from Finviz...")
+        st.info("Fetching high-impact theme news...")
 
 with tab_bias:
     st.subheader("🔍 Market Bias & Gap Analysis")
-    st.caption("Bullish / Bearish / Chop regime based on **today's price vs yesterday close** • Gap % = (open - yesterday close)")
+    st.caption("Bullish / Bearish / Chop regime based on today's price vs yesterday close")
 
     key_assets = ["VIX", "ES (S&P 500 Fut)", "NQ (Nasdaq Fut)", "YM (Dow Fut)", 
                   "RTY (Russell 2000)", "SPY", "QQQ", "S&P 500"]
@@ -892,4 +883,7 @@ with tab_bias:
     
     st.info("**Regime Logic**: >1.8% = Strong Bull | 0.6–1.8% = Bull | ±0.6% = Chop | -1.8 to -0.6 = Bear | <-1.8% = Strong Bear")
 
-st_autorefresh(interval=30000, key="global_refresh")   # 30-second live refresh (was 45s)
+# ────────────────────────────────────────────────
+#  LIVE AUTO REFRESH
+# ────────────────────────────────────────────────
+st_autorefresh(interval=30000, key="global_refresh")   # 30-second live refresh
