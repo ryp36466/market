@@ -289,3 +289,78 @@ with tabs[5]: # Or add a 6th tab: "⚖️ Leaderboard"
                     )
         except Exception as e:
             st.warning(f"Waiting for SPY data to sync... {e}")
+
+# ────────────────────────────────────────────────
+#  ALERTS ENGINE (Vegas Style)
+# ────────────────────────────────────────────────
+
+# 1. Initialize Alert History in Session State
+if 'alert_log' not in st.session_state:
+    st.session_state.alert_log = []
+
+def trigger_alert(msg, icon="🔔"):
+    """Adds a timestamped alert to the log."""
+    now = datetime.datetime.now().strftime("%H:%M:%S")
+    alert = f"[{now}] {icon} {msg}"
+    # Keep only the last 10 alerts
+    st.session_state.alert_log = [alert] + st.session_state.alert_log[:9]
+
+def process_live_alerts(df, intra):
+    """Checks for technical triggers: VWAP Cross & 52-Week Highs."""
+    tz = pytz.timezone('US/Eastern')
+    today_str = datetime.datetime.now(tz).strftime('%Y-%m-%d')
+    
+    for _, row in df.iterrows():
+        sym = row['Symbol']
+        price = row['Price']
+        
+        # --- A. VWAP CROSSOVER CALCULATION ---
+        try:
+            # Filter today's 1m candles
+            today_data = intra.xs(sym, level=1, axis=1).dropna()
+            today_data = today_data[today_data.index.strftime('%Y-%m-%d') == today_str]
+            
+            if not today_data.empty:
+                # Calculate Cumulative VWAP: sum(P*V) / sum(V)
+                v_sum = today_data['Volume'].sum()
+                pv_sum = (today_data['Close'] * today_data['Volume']).sum()
+                vwap = pv_sum / v_sum if v_sum > 0 else 0
+                
+                # Detect Crossover (Price was below VWAP 2 mins ago, now above)
+                if len(today_data) >= 3:
+                    prev_price = today_data['Close'].iloc[-2]
+                    if prev_price < vwap and price > vwap:
+                        trigger_alert(f"{sym} CRITICAL: Crossing ABOVE VWAP @ ${price:.2f}", "🚀")
+                    elif prev_price > vwap and price < vwap:
+                        trigger_alert(f"{sym} WARNING: Slicing BELOW VWAP @ ${price:.2f}", "⚠️")
+        except: continue
+
+        # --- B. UNUSUAL VOLUME SPARK ---
+        if row['RVOL'] > 3.5:
+            trigger_alert(f"{sym} VOLUME EXPLOSION: {row['RVOL']}x Avg Vol!", "🔥")
+
+# ────────────────────────────────────────────────
+#  UI: THE ALERT TERMINAL
+# ────────────────────────────────────────────────
+
+# Place this above your Tabs or in a Sidebar
+with st.sidebar:
+    st.markdown("### 🎰 LIVE TRADE ALERTS")
+    # Run the processor
+    process_live_alerts(market_df, intra_data)
+    
+    # Display the "Vegas" Log
+    with st.container(height=300, border=True):
+        if not st.session_state.alert_log:
+            st.caption("Waiting for market triggers...")
+        for alert in st.session_state.alert_log:
+            if "CRITICAL" in alert or "EXPLOSION" in alert:
+                st.write(f"**:green[{alert}]**")
+            elif "WARNING" in alert:
+                st.write(f"**:red[{alert}]**")
+            else:
+                st.write(alert)
+
+    if st.button("Clear Log"):
+        st.session_state.alert_log = []
+        st.rerun()
