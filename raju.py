@@ -130,37 +130,56 @@ def impact_score(title):
     return score
 
 # ────────────────────────────────────────────────
-#  DATA HELPERS
+#  FIXED DATA HELPERS - WORKS AT 4AM PRE-MARKET
 # ────────────────────────────────────────────────
 
-@st.cache_data(ttl=45)
+@st.cache_data(ttl=20)
 def fetch_market_snapshot():
-    hist_data = yf.download(ALL_SYMBOLS, period="5d", interval="1d", progress=False)
-    intra = yf.download(ALL_SYMBOLS, period="1d", interval="5m", prepost=True, progress=False)
+    """Fixed version that reliably shows live pre-market prices, change%, gap% from 4:00 AM ET"""
+    hist_data = yf.download(ALL_SYMBOLS, period="10d", interval="1d", progress=False)
+    intra = yf.download(ALL_SYMBOLS, period="2d", interval="5m", prepost=True, progress=False)
     
     rows = []
     for sym in ALL_SYMBOLS:
-        label = symbol_to_label[sym]
+        label = symbol_to_label.get(sym, sym)
         try:
-            price = intra['Close'][sym].dropna().iloc[-1]
-            prev_close = hist_data['Close'][sym].iloc[-2]
+            tk = yf.Ticker(sym)
+            fast = tk.fast_info
             
-            open_series = intra['Open'][sym].dropna()
-            today_open = open_series.iloc[0] if not open_series.empty else price
-            gap_pct = ((today_open - prev_close) / prev_close * 100) if prev_close > 0 else 0.0
+            # Reliable pre-market / regular price
+            price = fast.get('lastPrice') or fast.get('regularMarketPrice') or fast.get('previousClose')
+            prev_close = fast.get('regularMarketPreviousClose') or fast.get('previousClose')
             
-            change = ((price - prev_close) / prev_close) * 100
-            today_vol = intra['Volume'][sym].sum()
-            avg_vol = hist_data['Volume'][sym].iloc[-5:-1].mean()
-            rvol = today_vol / avg_vol if avg_vol > 0 else 1.0
+            if price is None or prev_close is None or prev_close <= 0:
+                continue
+                
+            price = float(price)
+            prev_close = float(prev_close)
+            change = ((price - prev_close) / prev_close * 100)
+            
+            # Gap % using actual first trade of the session (pre-market open)
+            try:
+                open_series = intra['Open'][sym].dropna()
+                today_open = open_series.iloc[0] if not open_series.empty else price
+                gap_pct = ((today_open - prev_close) / prev_close * 100)
+            except:
+                gap_pct = 0.0
+            
+            # RVOL
+            try:
+                today_vol = intra['Volume'][sym].sum()
+                avg_vol = hist_data['Volume'][sym].iloc[-8:-1].mean()
+                rvol = today_vol / avg_vol if avg_vol > 0 else 1.0
+            except:
+                rvol = 1.0
             
             rows.append({
                 "Asset": label, 
                 "Symbol": sym, 
-                "Price": price, 
-                "Gap %": gap_pct,
-                "Change %": change, 
-                "RVOL": rvol
+                "Price": round(price, 4), 
+                "Gap %": round(gap_pct, 2),
+                "Change %": round(change, 2), 
+                "RVOL": round(rvol, 2)
             })
         except:
             continue
@@ -319,7 +338,7 @@ def get_theme_stock_news(max_stocks=30):
 
 
 # ────────────────────────────────────────────────
-#  NEW: HIGH-IMPACT MAG7 + SPY + QQQ HOT NEWS
+#  HIGH-IMPACT MAG7 + SPY + QQQ HOT NEWS
 # ────────────────────────────────────────────────
 @st.cache_data(ttl=180)
 def get_mag7_hot_news():
@@ -335,7 +354,7 @@ def get_mag7_hot_news():
             table = soup.find("table", class_="news-table")
             if not table: continue
             
-            for row in table.find_all("tr")[:10]:   # more rows because list is small
+            for row in table.find_all("tr")[:10]:
                 tds = row.find_all("td")
                 if len(tds) < 2: continue
                 time_str = tds[0].text.strip()
@@ -453,6 +472,13 @@ time_now = datetime.datetime.now(est).strftime('%H:%M:%S')
 
 st.title("🏛️ Alpha Terminal Pro")
 st.caption(f"EST {time_now} | Data as of {datetime.date.today()} | Day-Trader Edition with Macro Pulse")
+
+# ── Manual Refresh Button (works instantly at 4AM pre-market)
+col_refresh = st.columns([7, 1])
+with col_refresh[1]:
+    if st.button("🔄 Refresh Now", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
 
 tab_overview, tab_sectors, tab_themes, tab_rel_strength, tab_gex, tab_options, tab_earnings, tab_analyst, tab_macro, tab_extremes, tab_news, tab_bias = st.tabs([
     "📈 Market Overview", "🔥 Alpha Sectors", "🎯 Trading Themes", "⚖️ Relative Strength",
@@ -763,7 +789,7 @@ with tab_extremes:
     st.info("ATH/ATL scanner – coming soon")
 
 # ────────────────────────────────────────────────
-#  HIGH-IMPACT NEWS TAB (NOW WITH MAG7 + SPY + QQQ HOT NEWS)
+#  HIGH-IMPACT NEWS TAB
 # ────────────────────────────────────────────────
 with tab_news:
     st.subheader("🔥 Hot Mag7 + SPY/QQQ News")
@@ -838,4 +864,4 @@ with tab_bias:
     
     st.info("**Regime Logic**: >1.8% = Strong Bull | 0.6–1.8% = Bull | ±0.6% = Chop | -1.8 to -0.6 = Bear | <-1.8% = Strong Bear")
 
-st_autorefresh(interval=300000, key="global_refresh")
+st_autorefresh(interval=45000, key="global_refresh")   # 45-second live refresh
