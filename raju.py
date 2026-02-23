@@ -22,7 +22,7 @@ FINNHUB_KEY = st.secrets.get("FINNHUB_API_KEY", "d6au4n9r01qnr27itio0d6au4n9r01q
 
 if FINNHUB_KEY == "d6au4n9r01qnr27itio0d6au4n9r01qnr27itiog":
     st.sidebar.warning("🔑 Using DEMO Finnhub key (rate-limited). "
-                       "Add your own key in Streamlit Cloud → Settings → Secrets for unlimited use", icon="⚠️")
+                       "Add your own key in Streamlit Cloud → Settings → Secrets for full speed", icon="⚠️")
 
 # ────────────────────────────────────────────────
 #  TICKERS & SECTOR ROTATION FRAMEWORK
@@ -203,13 +203,15 @@ market_df, intra_data, hist_data = fetch_market_snapshot()
 macro_news = get_macro_news()
 
 # ────────────────────────────────────────────────
-#  PREMARKET SECTOR ROTATION CHECKLIST
+#  PREMARKET CHECKLIST (NO tabulate DEPENDENCY)
 # ────────────────────────────────────────────────
 def build_premarket_checklist(df):
     if df.empty:
         return "Data loading..."
+
     tz = pytz.timezone('US/Eastern')
     est_now = datetime.datetime.now(tz).strftime("%H:%M:%S")
+
     es = df[df['Symbol'] == 'ES=F']['Change %'].iloc[0] if not df[df['Symbol'] == 'ES=F'].empty else 0
     nq = df[df['Symbol'] == 'NQ=F']['Change %'].iloc[0] if not df[df['Symbol'] == 'NQ=F'].empty else 0
     rty = df[df['Symbol'] == 'RTY=F']['Change %'].iloc[0] if not df[df['Symbol'] == 'RTY=F'].empty else 0
@@ -223,7 +225,11 @@ def build_premarket_checklist(df):
             sector_perf[name] = round(row['Change %'].iloc[0], 2)
 
     strongest = max(sector_perf, key=sector_perf.get) if sector_perf else "N/A"
-    top_leaders = df[df['Symbol'].isin(TRADING_THEMES.get(strongest.replace(" (", " ("), []))].nlargest(5, 'Change %')[['Asset', 'Change %', 'Gap %']]
+    
+    # Manual leaders list (no tabulate needed)
+    leaders_list = df[df['Symbol'].isin(TRADING_THEMES.get(strongest.replace(" (", " ("), []))].nlargest(5, 'Change %')
+    leaders_str = "\n".join([f"• **{row['Asset']}** → {row['Change %']:+.2f}% (Gap {row['Gap %']:+.2f}%)" 
+                            for _, row in leaders_list.iterrows()])
 
     return f"""
 **🕓 PREMARKET CHECKLIST — {est_now} EST**
@@ -238,12 +244,12 @@ def build_premarket_checklist(df):
 ### STEP 2: STRONGEST SECTOR
 **{strongest}** (+{sector_perf.get(strongest, 0):+.2f}%) ← **TRADE HERE ONLY**
 
-### STEP 3: LEADERS IN STRONGEST SECTOR
-{top_leaders.to_markdown(index=False)}
+### STEP 3: TOP LEADERS IN STRONGEST SECTOR
+{leaders_str}
 
 ### STEP 4: ROTATION PLAYBOOK
-- Bull Open → Trade **{strongest}** leaders
-- Bear Open → Defensive (XLV / XLE)
+- Bull Open → Trade **{strongest}** leaders  
+- Bear Open → Defensive (XLV / XLE)  
 - Choppy → SPY/QQQ only or sit out first 30 min
 
 **Written Plan**: Only trade leaders in **{strongest}** with volume & structure.
