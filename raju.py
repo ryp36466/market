@@ -14,12 +14,15 @@ from streamlit_autorefresh import st_autorefresh
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ────────────────────────────────────────────────
-#  PAGE CONFIG + SECRETS (SECURITY HARDENED)
+#  PAGE CONFIG + SECRETS (SAFE)
 # ────────────────────────────────────────────────
 st.set_page_config(page_title="Alpha Terminal Pro", page_icon="🏛️", layout="wide")
 
-# SECURITY: No hardcoded fallback — will raise clear error if missing
-FINNHUB_KEY = st.secrets["FINNHUB_API_KEY"]
+FINNHUB_KEY = st.secrets.get("FINNHUB_API_KEY", "d6au4n9r01qnr27itio0d6au4n9r01qnr27itiog")
+
+if FINNHUB_KEY == "d6au4n9r01qnr27itio0d6au4n9r01qnr27itiog":
+    st.sidebar.warning("🔑 Using DEMO Finnhub key (rate-limited). "
+                       "Add your own key in Streamlit Cloud → Settings → Secrets for unlimited use", icon="⚠️")
 
 # ────────────────────────────────────────────────
 #  TICKERS & SECTOR ROTATION FRAMEWORK
@@ -109,7 +112,6 @@ def fetch_market_snapshot():
                 price_series = intra['Close'][sym].dropna()
                 price = float(price_series.iloc[-1]) if not price_series.empty else 0.0
                 
-                # HARDENED: Defensive yesterday close (handles new IPOs / holidays)
                 daily_close = hist['Close'][sym].dropna()
                 prev_close = daily_close.iloc[-2] if len(daily_close) >= 2 else (daily_close.iloc[-1] if len(daily_close) > 0 else price)
 
@@ -144,7 +146,7 @@ def fetch_market_snapshot():
     return pd.DataFrame(rows), intra, hist
 
 # ────────────────────────────────────────────────
-#  HELPERS (UNCHANGED)
+#  HELPERS
 # ────────────────────────────────────────────────
 def calc_gamma_vectorized(S, K, T, v, r, q, types, OI):
     T = np.maximum(T, 1/365.0)
@@ -206,10 +208,8 @@ macro_news = get_macro_news()
 def build_premarket_checklist(df):
     if df.empty:
         return "Data loading..."
-
     tz = pytz.timezone('US/Eastern')
     est_now = datetime.datetime.now(tz).strftime("%H:%M:%S")
-
     es = df[df['Symbol'] == 'ES=F']['Change %'].iloc[0] if not df[df['Symbol'] == 'ES=F'].empty else 0
     nq = df[df['Symbol'] == 'NQ=F']['Change %'].iloc[0] if not df[df['Symbol'] == 'NQ=F'].empty else 0
     rty = df[df['Symbol'] == 'RTY=F']['Change %'].iloc[0] if not df[df['Symbol'] == 'RTY=F'].empty else 0
@@ -289,8 +289,6 @@ with tabs[0]:
     st.subheader("🚀 PREMARKET SECTOR ROTATION CHECKLIST")
     st.markdown(build_premarket_checklist(market_df))
     st.caption("Copy → Notes → Trade ONLY the strongest sector leaders.")
-
-# (All other tabs remain exactly the same as previous version — GEX, PCR, Analyst, Regime, Paper Trading)
 
 with tabs[1]:
     st.subheader("🗝️ Key Indices & Mag7")
@@ -464,7 +462,6 @@ def process_live_alerts(df, intra):
             today_data = today_data[today_data.index.strftime('%Y-%m-%d') == today_str]
             if len(today_data) >= 3:
                 v_sum = today_data['Volume'].sum()
-                # HARDENED Zero-Volume Protection
                 vwap = (today_data['Close'] * today_data['Volume']).sum() / v_sum if v_sum > 0 else price
                 prev_price = today_data['Close'].iloc[-2]
                 if prev_price < vwap and price > vwap:
