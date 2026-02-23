@@ -424,3 +424,104 @@ with st.sidebar:
     if st.button("Clear Log"):
         st.session_state.alert_log = []
         st.rerun()
+
+
+# ────────────────────────────────────────────────
+#  PAPER TRADING ENGINE (The Simulator)
+# ────────────────────────────────────────────────
+
+# 1. Initialize Portfolio
+if 'cash' not in st.session_state:
+    st.session_state.cash = 100000.0  # Start with $100k
+if 'portfolio' not in st.session_state:
+    st.session_state.portfolio = {}  # { 'AAPL': {'qty': 10, 'avg_price': 150.0} }
+
+def execute_trade(symbol, qty, price, side):
+    """Handles the math for buying and selling."""
+    cost = qty * price
+    if side == "BUY":
+        if cost > st.session_state.cash:
+            st.error("❌ Insufficient Funds!")
+            return
+        st.session_state.cash -= cost
+        # Update Position
+        pos = st.session_state.portfolio.get(symbol, {'qty': 0, 'avg_price': 0.0})
+        total_qty = pos['qty'] + qty
+        new_avg = ((pos['qty'] * pos['avg_price']) + cost) / total_qty
+        st.session_state.portfolio[symbol] = {'qty': total_qty, 'avg_price': new_avg}
+        st.toast(f"Bought {qty} {symbol} at ${price:.2f}")
+        
+    elif side == "SELL":
+        pos = st.session_state.portfolio.get(symbol, {'qty': 0})
+        if pos['qty'] < qty:
+            st.error("❌ You don't own enough shares!")
+            return
+        st.session_state.cash += cost
+        st.session_state.portfolio[symbol]['qty'] -= qty
+        if st.session_state.portfolio[symbol]['qty'] == 0:
+            del st.session_state.portfolio[symbol]
+        st.toast(f"Sold {qty} {symbol} at ${price:.2f}")
+
+# ────────────────────────────────────────────────
+#  UI: PORTFOLIO DASHBOARD
+# ────────────────────────────────────────────────
+
+with tabs[6]:  # New Tab
+    st.subheader("💼 Paper Trading Simulator")
+    
+    # --- Top Stats ---
+    # Calculate Total Portfolio Value
+    current_positions_value = 0
+    portfolio_rows = []
+    
+    for sym, data in st.session_state.portfolio.items():
+        # Get live price from our market_df
+        live_price_row = market_df[market_df['Symbol'] == sym]
+        live_price = live_price_row['Price'].values[0] if not live_price_row.empty else data['avg_price']
+        
+        value = data['qty'] * live_price
+        pnl = (live_price - data['avg_price']) * data['qty']
+        pnl_pct = ((live_price / data['avg_price']) - 1) * 100
+        
+        current_positions_value += value
+        portfolio_rows.append({
+            "Ticker": sym, "Qty": data['qty'], "Avg Price": f"${data['avg_price']:.2f}",
+            "Live Price": f"${live_price:.2f}", "P&L $": round(pnl, 2), "P&L %": f"{pnl_pct:+.2f}%"
+        })
+
+    total_account_value = st.session_state.cash + current_positions_value
+    
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Cash Balance", f"${st.session_state.cash:,.2f}")
+    c2.metric("Total Equity", f"${total_account_value:,.2f}", 
+              delta=f"{(total_account_value - 100000):+,.2f} Total P&L")
+    c3.metric("Open Positions", len(st.session_state.portfolio))
+
+    # --- Trade Entry ---
+    st.markdown("---")
+    t_col1, t_col2, t_col3, t_col4 = st.columns([2, 1, 1, 1])
+    
+    with t_col1:
+        trade_sym = st.selectbox("Select Ticker", options=ALL_SYMBOLS)
+    with t_col2:
+        trade_qty = st.number_input("Quantity", min_value=1, value=10)
+    
+    # Get current price for UI
+    curr_p = market_df[market_df['Symbol'] == trade_sym]['Price'].values[0] if not market_df[market_df['Symbol'] == trade_sym].empty else 0
+    
+    with t_col3:
+        if st.button("BUY", use_container_width=True, type="primary"):
+            execute_trade(trade_sym, trade_qty, curr_p, "BUY")
+            st.rerun()
+    with t_col4:
+        if st.button("SELL", use_container_width=True):
+            execute_trade(trade_sym, trade_qty, curr_p, "SELL")
+            st.rerun()
+
+    # --- Open Positions Table ---
+    if portfolio_rows:
+        st.write("### Active Positions")
+        pdf = pd.DataFrame(portfolio_rows)
+        st.dataframe(pdf.style.background_gradient(cmap='RdYlGn', subset=['P&L $']), hide_index=True, use_container_width=True)
+    else:
+        st.info("No active positions. Execute a trade above to begin.")
