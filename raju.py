@@ -12,7 +12,6 @@ import plotly.graph_objects as go
 from scipy.stats import norm
 from streamlit_autorefresh import st_autorefresh
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import time
 
 # ────────────────────────────────────────────────
 #  PAGE CONFIG + SECRETS
@@ -53,7 +52,7 @@ ALL_SYMBOLS = list(set(list(symbol_to_label.keys()) + [s for t in TRADING_THEMES
 ANALYST_SYMBOLS = sorted(list(set([s for t in TRADING_THEMES.values() for s in t])))
 
 # ────────────────────────────────────────────────
-#  PARALLEL FINNHUB + YFINANCE (STABLE ON CLOUD)
+#  PARALLEL FINNHUB + YFINANCE (STABLE)
 # ────────────────────────────────────────────────
 def fetch_finnhub_quote(sym):
     try:
@@ -67,11 +66,9 @@ def fetch_finnhub_quote(sym):
 
 @st.cache_data(ttl=12)
 def fetch_market_snapshot():
-    # YFinance (stable)
     intra = yf.download(ALL_SYMBOLS, period="3d", interval="1m", prepost=True, progress=False, threads=False)
     hist = yf.download(ALL_SYMBOLS, period="15d", interval="1d", progress=False, threads=False)
 
-    # Parallel Finnhub (fast)
     with ThreadPoolExecutor(max_workers=30) as executor:
         future_to_sym = {executor.submit(fetch_finnhub_quote, s): s for s in ALL_SYMBOLS}
         finnhub_data = {}
@@ -124,7 +121,7 @@ def fetch_market_snapshot():
     return pd.DataFrame(rows), intra, hist
 
 # ────────────────────────────────────────────────
-#  HELPER FUNCTIONS
+#  HELPERS
 # ────────────────────────────────────────────────
 def calc_gamma_vectorized(S, K, T, v, r, q, types, OI):
     T = np.maximum(T, 1/365.0)
@@ -141,7 +138,9 @@ def get_pcr_data():
         try:
             tk = yf.Ticker(sym)
             chain = tk.option_chain(tk.options[0])
-            pcr = chain.puts['volume'].sum() / chain.calls['volume'].sum() if chain.calls['volume'].sum() > 0 else 0
+            cv = chain.calls['volume'].sum()
+            pv = chain.puts['volume'].sum()
+            pcr = pv / cv if cv > 0 else 0
             results.append({"Asset": sym, "PCR": round(pcr, 2),
                             "Sentiment": "🐂 Bull" if pcr < 0.7 else "🐻 Bear" if pcr > 1.1 else "⚖️ Neu"})
         except:
@@ -173,17 +172,17 @@ def get_macro_news():
         return []
 
 # ────────────────────────────────────────────────
-#  FETCH LIVE DATA FIRST
+#  FETCH DATA
 # ────────────────────────────────────────────────
 market_df, intra_data, hist_data = fetch_market_snapshot()
 macro_news = get_macro_news()
 
 # ────────────────────────────────────────────────
-#  MORNING BATTLE PLAN
+#  BATTLE PLAN
 # ────────────────────────────────────────────────
 def generate_battle_plan(df, macro_news_list):
     if df.empty:
-        return "Market data still loading..."
+        return "Market data loading..."
     
     spy_row = df[df['Symbol'] == 'SPY']
     vix_row = df[df['Symbol'] == '^VIX']
@@ -222,7 +221,7 @@ def generate_battle_plan(df, macro_news_list):
     return f"{mood} {catalyst} {tactic}"
 
 # ────────────────────────────────────────────────
-#  UI START
+#  UI
 # ────────────────────────────────────────────────
 st.title("🏛️ Alpha Terminal Pro")
 st.caption(f"Last Sync: {datetime.datetime.now(pytz.timezone('US/Eastern')).strftime('%H:%M:%S')} EST | Live Parallel Engine")
@@ -242,7 +241,6 @@ with col_vitals:
     top_gap = market_df.nlargest(1, 'Gap %')['Symbol'].iloc[0] if not market_df.empty else "N/A"
     st.metric("Top Gapper", top_gap)
 
-# Sidebar VIX
 st.sidebar.metric("VIX (Fear Index)", f"{vix_val:.2f}", delta="Risk On" if vix_val < 20 else "Volatility")
 
 # ────────────────────────────────────────────────
@@ -258,9 +256,7 @@ tabs = st.tabs([
     "💼 Paper Trading"
 ])
 
-# ────────────────────────────────────────────────
-#  TAB 0: MARKET OVERVIEW
-# ────────────────────────────────────────────────
+# TAB 0
 with tabs[0]:
     st.subheader("🗝️ Key Indices & Mag7")
     col1, col2 = st.columns([2, 1])
@@ -271,9 +267,7 @@ with tabs[0]:
         mag7 = market_df[market_df['Symbol'].isin(MAG7_TICKERS.values())].sort_values('Change %', ascending=False)
         st.dataframe(mag7[['Asset', 'Price', 'Change %', 'Gap %']].style.background_gradient(cmap='RdYlGn', subset=['Change %']), hide_index=True, use_container_width=True)
 
-# ────────────────────────────────────────────────
-#  TAB 1: THEMES
-# ────────────────────────────────────────────────
+# TAB 1
 with tabs[1]:
     cols = st.columns(len(TRADING_THEMES))
     for i, (name, syms) in enumerate(TRADING_THEMES.items()):
@@ -282,9 +276,7 @@ with tabs[1]:
             theme_df = market_df[market_df['Symbol'].isin(syms)]
             st.dataframe(theme_df[['Asset', 'Price', 'Change %']].style.background_gradient(cmap='RdYlGn'), hide_index=True, use_container_width=True)
 
-# ────────────────────────────────────────────────
-#  TAB 2: GEX
-# ────────────────────────────────────────────────
+# TAB 2
 with tabs[2]:
     user_ticker = st.text_input("GEX Ticker", value="SPY").upper().strip()
     if user_ticker:
@@ -303,25 +295,19 @@ with tabs[2]:
         except Exception as e:
             st.error(f"Options data unavailable: {e}")
 
-# ────────────────────────────────────────────────
-#  TAB 3: OPTIONS PCR
-# ────────────────────────────────────────────────
+# TAB 3
 with tabs[3]:
     st.subheader("🐳 Put/Call Volume Ratio")
     st.dataframe(get_pcr_data().style.background_gradient(subset=['PCR'], cmap='RdYlGn_r'), hide_index=True, use_container_width=True)
 
-# ────────────────────────────────────────────────
-#  TAB 4: ANALYST
-# ────────────────────────────────────────────────
+# TAB 4
 with tabs[4]:
     st.subheader("📊 Analyst Ratings")
     analyst_df = get_analyst_ratings()
     if not analyst_df.empty:
         st.dataframe(analyst_df.style.background_gradient(cmap='RdYlGn', subset=['Upside %']), hide_index=True, use_container_width=True)
 
-# ────────────────────────────────────────────────
-#  TAB 5: REGIME + ALPHA DELTA
-# ────────────────────────────────────────────────
+# TAB 5
 with tabs[5]:
     st.subheader("🔍 Market Regime Analysis")
     def get_bias(chg):
@@ -331,7 +317,6 @@ with tabs[5]:
     market_df['Regime'] = market_df['Change %'].apply(get_bias)
     st.dataframe(market_df[['Asset', 'Price', 'Change %', 'Gap %', 'Regime']].style.background_gradient(cmap='RdYlGn', subset=['Change %']), hide_index=True, use_container_width=True)
 
-    # Alpha Delta
     st.markdown("---")
     st.subheader("⚖️ Relative Strength vs SPY (Alpha Delta)")
     if not market_df.empty:
@@ -365,9 +350,7 @@ with tabs[5]:
         except Exception as e:
             st.warning(f"RS data syncing... {e}")
 
-# ────────────────────────────────────────────────
-#  TAB 6: PAPER TRADING
-# ────────────────────────────────────────────────
+# TAB 6 — PAPER TRADING (FIXED)
 with tabs[6]:
     st.subheader("💼 Paper Trading Simulator")
 
@@ -388,7 +371,7 @@ with tabs[6]:
             new_avg = ((pos['qty'] * pos['avg_price']) + cost) / total_qty if total_qty > 0 else price
             st.session_state.portfolio[symbol] = {'qty': total_qty, 'avg_price': new_avg}
             st.success(f"✅ Bought {qty} {symbol} @ ${price:.2f}")
-        else:  # SELL
+        else:
             pos = st.session_state.portfolio.get(symbol, {'qty': 0})
             if pos['qty'] < qty:
                 st.error("❌ Not enough shares!")
@@ -415,7 +398,7 @@ with tabs[6]:
 
     c1, c2, c3 = st.columns(3)
     c1.metric("Cash", f"${st.session_state.cash:,.2f}")
-    c2.metric("Total Equity", f"${total_value:,.2f}", f"{(total_value-100000):+, .2f}")
+    c2.metric("Total Equity", f"${total_value:,.2f}", f"{(total_value - 100000):+,.2f}")   # ← FIXED: no space after comma
     c3.metric("Positions", len(st.session_state.portfolio))
 
     st.markdown("---")
@@ -438,7 +421,7 @@ with tabs[6]:
         st.dataframe(pd.DataFrame(portfolio_rows).style.background_gradient(cmap='RdYlGn', subset=['P&L $']), hide_index=True, use_container_width=True)
 
 # ────────────────────────────────────────────────
-#  LIVE ALERTS (VWAP + RVOL)
+#  LIVE ALERTS
 # ────────────────────────────────────────────────
 if 'alert_log' not in st.session_state:
     st.session_state.alert_log = []
@@ -454,7 +437,6 @@ def process_live_alerts(df, intra):
     for _, row in df.iterrows():
         sym = row['Symbol']
         price = row['Price']
-        # VWAP Cross
         try:
             today_data = intra.xs(sym, level=1, axis=1).dropna()
             today_data = today_data[today_data.index.strftime('%Y-%m-%d') == today_str]
@@ -469,11 +451,9 @@ def process_live_alerts(df, intra):
                     trigger_alert(f"{sym} ⚠️ SLICING BELOW VWAP @ ${price:.2f}", "⚠️")
         except:
             pass
-        # RVOL Explosion
         if row['RVOL'] > 3.5:
             trigger_alert(f"{sym} 🔥 VOLUME EXPLOSION: {row['RVOL']:.1f}x Avg!", "🔥")
 
-# Sidebar Alerts
 with st.sidebar:
     st.markdown("### 🎰 LIVE TRADE ALERTS")
     process_live_alerts(market_df, intra_data)
@@ -492,6 +472,6 @@ with st.sidebar:
         st.rerun()
 
 # ────────────────────────────────────────────────
-#  REFRESH
+#  AUTO REFRESH
 # ────────────────────────────────────────────────
-st_autorefresh(interval=25000, key="live_refresh")  # 25 seconds
+st_autorefresh(interval=25000, key="live_refresh")
