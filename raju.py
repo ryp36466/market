@@ -6,6 +6,8 @@ import datetime
 import pytz
 import asyncio
 import aiohttp
+import requests
+from bs4 import BeautifulSoup
 from streamlit_autorefresh import st_autorefresh
 import plotly.express as px
 import plotly.graph_objects as go
@@ -35,16 +37,15 @@ TRADING_THEMES = {
 }
 
 MAG7_TICKERS = ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA"]
-DEFAULT_NEWS_SYMS = ["SPY", "NVDA", "TSLA", "BTC-USD"]
+DEFAULT_NEWS_SYMS = ["SPY", "NVDA", "TSLA", "BTC-USD", "SMH", "QQQ"]
 
-# Integrity Check: Ensure all symbols are uppercase and unique
+# Integrity Check
 all_raw = list(GLOBAL_TICKERS.values()) + [s for t in TRADING_THEMES.values() for s in t] + MAG7_TICKERS + DEFAULT_NEWS_SYMS
 ALL_SYMBOLS = sorted(list(set([s.upper() for s in all_raw])))
 
 # ────────────────────────────────────────────────
 #  3. ASYNC ENGINE: QUOTES & NEWS
 # ────────────────────────────────────────────────
-
 async def fetch_async(session, url):
     try:
         async with session.get(url, timeout=5) as response:
@@ -54,20 +55,15 @@ async def fetch_async(session, url):
 
 async def get_market_package(symbols, news_tickers):
     async with aiohttp.ClientSession() as session:
-        # Quote Tasks
         q_tasks = [fetch_async(session, f"https://finnhub.io/api/v1/quote?symbol={s.replace('^', '').split('=')[0]}&token={FINNHUB_KEY}") for s in symbols]
-        
-        # News Tasks (Last 24 Hours)
         to_date = datetime.datetime.now().strftime('%Y-%m-%d')
         from_date = (datetime.datetime.now() - datetime.timedelta(days=1)).strftime('%Y-%m-%d')
         n_tasks = [fetch_async(session, f"https://finnhub.io/api/v1/company-news?symbol={s}&from={from_date}&to={to_date}&token={FINNHUB_KEY}") for s in news_tickers]
-        
         results = await asyncio.gather(*(q_tasks + n_tasks))
         return results[:len(symbols)], results[len(symbols):]
 
 @st.cache_data(ttl=15)
 def fetch_terminal_data(news_focus):
-    # Batch technicals from YFinance
     intra = yf.download(ALL_SYMBOLS, period="3d", interval="1m", prepost=True, progress=False)
     hist = yf.download(ALL_SYMBOLS, period="20d", interval="1d", progress=False)
     
@@ -91,7 +87,6 @@ def fetch_terminal_data(news_focus):
             prev_close = q['pc'] if q and q.get('pc') else hist['Close'][sym].dropna().iloc[-2]
             change = ((price - prev_close) / prev_close * 100)
             
-            # RVOL Calculation
             try:
                 today_vol = intra['Volume'][sym].loc[today_str].sum()
                 avg_vol = hist['Volume'][sym].iloc[-15:-2].mean()
@@ -104,28 +99,85 @@ def fetch_terminal_data(news_focus):
     return pd.DataFrame(rows), n_data
 
 # ────────────────────────────────────────────────
-#  4. SIDEBAR & SETTINGS
+#  SENTIMENT HELPER
+# ────────────────────────────────────────────────
+def get_sentiment_score(text):
+    bull = ['upbeat','growth','surge','rally','beat','buy','bullish','expansion','profit','gain','positive','jump','upgrade','raise','strong','outperform','higher','rise','soar']
+    bear = ['slump','drop','fall','miss','sell','bearish','contraction','loss','negative','inflation','fear','risk','sink','downgrade','cut','weak','underperform','lower','decline','plunge']
+    score = sum(1 for w in bull if w in text.lower()) - sum(1 for w in bear if w in text.lower())
+    if score > 2: return "🟢 Bullish", score
+    if score < -2: return "🔴 Bearish", score
+    if score > 0: return "🟡 Mild Bull", score
+    if score < 0: return "🟠 Mild Bear", score
+    return "⚪ Neutral", 0
+
+# ────────────────────────────────────────────────
+#  FINVIZ NEWS SCRAPER (NEW TAB)
+# ────────────────────────────────────────────────
+def get_finviz_news():
+    news = []
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    
+    for sym in ALL_SYMBOLS[:15]:  # limit to avoid rate limiting
+        try:
+            url = f"https://finviz.com/quote.ashx?t={sym}"
+            r = requests.get(url, headers=headers, timeout=8)
+            soup = BeautifulSoup(r.text, "html.parser")
+            table = soup.find("table", class_="news-table")
+            if not table: continue
+            
+            for row in table.find_all("tr")[:6]:
+                tds = row.find_all("td")
+                if len(tds) < 2: continue
+                time_str = tds[0].text.strip()
+                a = tds[1].find("a")
+                if not a: continue
+                title = a.text.strip()
+                link = a.get("href")
+                if not link.startswith("http"): link = "https://finviz.com" + link
+                
+                label, score = get_sentiment_score(title)
+                
+                news.append({
+                    "Asset": sym,
+                    "Title": title,
+                    "URL": link,
+                    "Time": time_str,
+                    "Sentiment": label,
+                    "Score": score
+                })
+        except:
+            continue
+    
+    df = pd.DataFrame(news)
+    if not df.empty:
+        df = df.sort_values("Score", ascending=False).drop_duplicates("Title").head(40)
+    return df
+
+# ────────────────────────────────────────────────
+#  FETCH DATA
+# ────────────────────────────────────────────────
+news_focus = ["SPY", "NVDA", "TSLA", "BTC-USD", "SMH", "QQQ"]  # default focus
+market_df, raw_news = fetch_terminal_data(news_focus)
+finviz_news_df = get_finviz_news()
+
+# ────────────────────────────────────────────────
+#  SIDEBAR & SETTINGS
 # ────────────────────────────────────────────────
 with st.sidebar:
     st.header("⚙️ Terminal Settings")
-    
-    # SAFETY: Only allow defaults that exist in ALL_SYMBOLS to prevent StreamlitAPIException
-    safe_defaults = [s for s in DEFAULT_NEWS_SYMS if s in ALL_SYMBOLS]
-    news_focus = st.multiselect("News Focus", options=ALL_SYMBOLS, default=safe_defaults)
-    
+    news_focus = st.multiselect("News Focus (Finnhub)", options=ALL_SYMBOLS, default=news_focus)
     st.divider()
     if st.button("Refresh Terminal", use_container_width=True): 
         st.cache_data.clear()
         st.rerun()
 
-market_df, raw_news = fetch_terminal_data(news_focus)
-
 # ────────────────────────────────────────────────
-#  5. MAIN UI
+#  MAIN UI
 # ────────────────────────────────────────────────
 st.title("🏛️ Alpha Terminal Pro")
 
-# --- TOP STATS ---
+# Top Stats
 with st.container(border=True):
     c1, c2, c3 = st.columns([2, 1, 1])
     spy_chg = market_df[market_df['Symbol'] == 'SPY']['Change %'].values[0] if 'SPY' in market_df['Symbol'].values else 0
@@ -139,13 +191,15 @@ with st.container(border=True):
     with c3:
         st.metric("S&P 500 Change", f"{spy_chg}%", delta=f"{spy_chg}%")
 
-# --- TABS ---
-tabs = st.tabs(["📊 Overview", "🎯 Themes", "⚖️ Alpha Delta", "📰 Live News", "📊 GEX", "💼 Portfolio"])
+# ────────────────────────────────────────────────
+#  TABS (with new Finviz tab)
+# ────────────────────────────────────────────────
+tabs = st.tabs(["📊 Overview", "🎯 Themes", "⚖️ Alpha Delta", "📰 Finnhub Live News", "📰 Finviz News Sentiment", "📊 GEX", "💼 Portfolio"])
 
-with tabs[0]: # Overview
+with tabs[0]:
     st.dataframe(market_df[market_df['Symbol'].isin(GLOBAL_TICKERS.values())].style.background_gradient(cmap='RdYlGn', subset=['Change %']), hide_index=True, use_container_width=True)
 
-with tabs[1]: # Themes
+with tabs[1]:
     t_cols = st.columns(len(TRADING_THEMES))
     for i, (name, syms) in enumerate(TRADING_THEMES.items()):
         with t_cols[i]:
@@ -153,13 +207,13 @@ with tabs[1]: # Themes
             theme_view = market_df[market_df['Symbol'].isin([s.upper() for s in syms])][['Symbol', 'Change %']]
             st.dataframe(theme_view.style.background_gradient(cmap='RdYlGn'), hide_index=True)
 
-with tabs[2]: # Alpha Delta
+with tabs[2]:
     market_df['Alpha'] = market_df['Change %'] - spy_chg
     fig_rs = px.bar(market_df[market_df['Symbol'].isin([s for t in TRADING_THEMES.values() for s in t])].sort_values('Alpha'), 
                     x='Symbol', y='Alpha', color='Alpha', color_continuous_scale='RdYlGn', title="Relative Strength vs SPY")
     st.plotly_chart(fig_rs, use_container_width=True)
 
-with tabs[3]: # News
+with tabs[3]:
     st.subheader("📰 Finnhub Live Wire")
     if raw_news:
         all_news = [item for sublist in raw_news if sublist for item in sublist]
@@ -171,7 +225,20 @@ with tabs[3]: # News
                 st.markdown(f"{sentiment} **{item['related']}** | {datetime.datetime.fromtimestamp(item['datetime']).strftime('%H:%M')} | *{item['source']}*")
                 st.markdown(f"#### [{item['headline']}]({item['url']})")
 
-with tabs[4]: # Gamma GEX
+# NEW FINVIZ TAB
+with tabs[4]:
+    st.subheader("📰 Finviz News Sentiment (Recent)")
+    st.caption("🟢 Positive • 🔴 Negative • ⚪ Neutral • Latest headlines from Finviz")
+    if not finviz_news_df.empty:
+        for _, row in finviz_news_df.iterrows():
+            emoji = "🟢" if "Bull" in row['Sentiment'] else "🔴" if "Bear" in row['Sentiment'] else "⚪"
+            with st.expander(f"{emoji} {row['Sentiment']} | {row['Asset']} | {row['Title'][:90]}{'...' if len(row['Title']) > 90 else ''} • {row['Time']}"):
+                st.write(f"[🔗 Read full story]({row['URL']})")
+    else:
+        st.info("Fetching Finviz news...")
+
+with tabs[5]:
+    st.subheader("Options Gamma Profile")
     target = st.text_input("GEX Strike Analysis", "SPY").upper()
     try:
         tk = yf.Ticker(target)
@@ -184,7 +251,8 @@ with tabs[4]: # Gamma GEX
         st.plotly_chart(fig_gex, use_container_width=True)
     except: st.error("Options data unavailable for this ticker.")
 
-with tabs[5]: # Portfolio
+with tabs[6]:
+    st.subheader("💼 Paper Trading Simulator")
     if 'cash' not in st.session_state: st.session_state.cash = 100000.0
     if 'portfolio' not in st.session_state: st.session_state.portfolio = {}
     
