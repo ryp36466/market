@@ -5,13 +5,11 @@ import numpy as np
 import datetime
 import pytz
 import requests
-from bs4 import BeautifulSoup
-from finvizfinance.news import News
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from streamlit_autorefresh import st_autorefresh
 import plotly.express as px
 import plotly.graph_objects as go
 from scipy.stats import norm
-from streamlit_autorefresh import st_autorefresh
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ────────────────────────────────────────────────
 #  PAGE CONFIG + SECRETS (SAFE)
@@ -25,7 +23,7 @@ if FINNHUB_KEY == "d6au4n9r01qnr27itio0d6au4n9r01qnr27itiog":
                        "Add your own key in Streamlit Cloud → Settings → Secrets for full speed", icon="⚠️")
 
 # ────────────────────────────────────────────────
-#  TICKERS & SECTOR ROTATION FRAMEWORK
+#  TICKERS & THEMES
 # ────────────────────────────────────────────────
 GLOBAL_TICKERS = {
     "VIX": "^VIX", "ES": "ES=F", "NQ": "NQ=F", "YM": "YM=F", "RTY": "RTY=F",
@@ -73,8 +71,10 @@ ALL_SYMBOLS = list(set(list(symbol_to_label.keys()) +
 
 ANALYST_SYMBOLS = sorted(list(set([s for t in TRADING_THEMES.values() for s in t])))
 
+IMPORTANT_SYMBOLS = list(MAG7_TICKERS.values()) + list(SECTOR_ETFS.values()) + ["BTC-USD", "SMCI", "PLTR", "COIN", "TSLA", "NVDA"]
+
 # ────────────────────────────────────────────────
-#  PARALLEL FINNHUB + YFINANCE (HARDENED)
+#  DATA FETCHING
 # ────────────────────────────────────────────────
 def fetch_finnhub_quote(sym):
     try:
@@ -146,72 +146,71 @@ def fetch_market_snapshot():
     return pd.DataFrame(rows), intra, hist
 
 # ────────────────────────────────────────────────
-#  HELPERS
+#  24-HOUR NEWS + SENTIMENT (NEW FEATURE)
 # ────────────────────────────────────────────────
-def calc_gamma_vectorized(S, K, T, v, r, q, types, OI):
-    T = np.maximum(T, 1/365.0)
-    v = np.maximum(v, 0.01)
-    d1 = (np.log(S / K) + (r - q + 0.5 * v**2) * T) / (v * np.sqrt(T))
-    gamma = np.exp(-q * T) * norm.pdf(d1) / (S * v * np.sqrt(T))
-    val = gamma * OI * 100 * S
-    return np.where(types == 'call', val, -val)
+def get_sentiment_score(text):
+    bull = ['upbeat','growth','surge','rally','beat','buy','bullish','expansion','profit','gain','positive','jump','upgrade','raise','strong','outperform','higher','rise','soar']
+    bear = ['slump','drop','fall','miss','sell','bearish','contraction','loss','negative','inflation','fear','risk','sink','downgrade','cut','weak','underperform','lower','decline','plunge']
+    score = sum(1 for w in bull if w in text.lower()) - sum(1 for w in bear if w in text.lower())
+    if score > 2: return "🟢 Bullish", score
+    if score < -2: return "🔴 Bearish", score
+    if score > 0: return "🟡 Mild Bull", score
+    if score < 0: return "🟠 Mild Bear", score
+    return "⚪ Neutral", 0
 
-@st.cache_data(ttl=600)
-def get_pcr_data():
-    results = []
-    for sym in ["SPY", "QQQ", "NVDA", "AAPL", "TSLA"]:
+@st.cache_data(ttl=180)
+def get_latest_24h_news():
+    news_items = []
+    tz = pytz.timezone('US/Eastern')
+    to_date = datetime.datetime.now(tz).date().strftime('%Y-%m-%d')
+    from_date = (datetime.datetime.now(tz) - datetime.timedelta(days=1)).date().strftime('%Y-%m-%d')
+
+    def fetch_news(sym):
         try:
-            tk = yf.Ticker(sym)
-            chain = tk.option_chain(tk.options[0])
-            cv = chain.calls['volume'].sum()
-            pv = chain.puts['volume'].sum()
-            pcr = pv / cv if cv > 0 else 0
-            results.append({"Asset": sym, "PCR": round(pcr, 2),
-                            "Sentiment": "🐂 Bull" if pcr < 0.7 else "🐻 Bear" if pcr > 1.1 else "⚖️ Neu"})
+            url = f"https://finnhub.io/api/v1/company-news?symbol={sym}&from={from_date}&to={to_date}&token={FINNHUB_KEY}"
+            r = requests.get(url, timeout=8)
+            r.raise_for_status()
+            for item in r.json()[:8]:
+                title = item.get('headline', '')
+                if len(title) < 20: continue
+                label, score = get_sentiment_score(title)
+                dt = datetime.datetime.fromtimestamp(item.get('datetime', 0), tz=pytz.UTC)
+                time_est = dt.astimezone(tz).strftime('%H:%M')
+                news_items.append({
+                    "Asset": symbol_to_label.get(sym, sym),
+                    "Symbol": sym,
+                    "Title": title,
+                    "URL": item.get('url', ''),
+                    "Source": item.get('source', 'Finnhub'),
+                    "Time": time_est,
+                    "Sentiment": label,
+                    "Score": score
+                })
         except:
-            continue
-    return pd.DataFrame(results)
+            pass
 
-@st.cache_data(ttl=1800)
-def get_analyst_ratings():
-    ratings = []
-    for sym in ANALYST_SYMBOLS[:20]:
-        try:
-            info = yf.Ticker(sym).info
-            ratings.append({
-                "Asset": symbol_to_label.get(sym, sym),
-                "Consensus": info.get("recommendationKey", "N/A").replace('_', ' ').title(),
-                "Target Mean": info.get("targetMeanPrice"),
-                "Current": info.get("currentPrice"),
-                "Upside %": round(((info.get("targetMeanPrice") or 0) / (info.get("currentPrice") or 1) - 1) * 100, 1)
-            })
-        except:
-            continue
-    return pd.DataFrame(ratings)
+    with ThreadPoolExecutor(max_workers=20) as executor:
+        executor.map(fetch_news, IMPORTANT_SYMBOLS)
 
-@st.cache_data(ttl=300)
-def get_macro_news():
-    try:
-        return News().get_news()['news'].head(25).to_dict('records')
-    except:
-        return []
+    df = pd.DataFrame(news_items)
+    if not df.empty:
+        df = df.sort_values(by="Score", ascending=False).drop_duplicates(subset=["Title"]).head(50)
+    return df
 
 # ────────────────────────────────────────────────
 #  FETCH DATA
 # ────────────────────────────────────────────────
 market_df, intra_data, hist_data = fetch_market_snapshot()
-macro_news = get_macro_news()
+news_df = get_latest_24h_news()
 
 # ────────────────────────────────────────────────
-#  PREMARKET CHECKLIST (NO tabulate DEPENDENCY)
+#  PREMARKET CHECKLIST (NO EXTERNAL DEPENDENCY)
 # ────────────────────────────────────────────────
 def build_premarket_checklist(df):
     if df.empty:
         return "Data loading..."
-
     tz = pytz.timezone('US/Eastern')
     est_now = datetime.datetime.now(tz).strftime("%H:%M:%S")
-
     es = df[df['Symbol'] == 'ES=F']['Change %'].iloc[0] if not df[df['Symbol'] == 'ES=F'].empty else 0
     nq = df[df['Symbol'] == 'NQ=F']['Change %'].iloc[0] if not df[df['Symbol'] == 'NQ=F'].empty else 0
     rty = df[df['Symbol'] == 'RTY=F']['Change %'].iloc[0] if not df[df['Symbol'] == 'RTY=F'].empty else 0
@@ -225,8 +224,6 @@ def build_premarket_checklist(df):
             sector_perf[name] = round(row['Change %'].iloc[0], 2)
 
     strongest = max(sector_perf, key=sector_perf.get) if sector_perf else "N/A"
-    
-    # Manual leaders list (no tabulate needed)
     leaders_list = df[df['Symbol'].isin(TRADING_THEMES.get(strongest.replace(" (", " ("), []))].nlargest(5, 'Change %')
     leaders_str = "\n".join([f"• **{row['Asset']}** → {row['Change %']:+.2f}% (Gap {row['Gap %']:+.2f}%)" 
                             for _, row in leaders_list.iterrows()])
@@ -244,15 +241,13 @@ def build_premarket_checklist(df):
 ### STEP 2: STRONGEST SECTOR
 **{strongest}** (+{sector_perf.get(strongest, 0):+.2f}%) ← **TRADE HERE ONLY**
 
-### STEP 3: TOP LEADERS IN STRONGEST SECTOR
+### STEP 3: TOP LEADERS
 {leaders_str}
 
 ### STEP 4: ROTATION PLAYBOOK
 - Bull Open → Trade **{strongest}** leaders  
 - Bear Open → Defensive (XLV / XLE)  
 - Choppy → SPY/QQQ only or sit out first 30 min
-
-**Written Plan**: Only trade leaders in **{strongest}** with volume & structure.
 """
 
 # ────────────────────────────────────────────────
@@ -281,6 +276,7 @@ st.sidebar.metric("VIX (Fear Index)", f"{vix_val:.2f}", delta="Risk On" if vix_v
 #  TABS
 # ────────────────────────────────────────────────
 tabs = st.tabs([
+    "📰 24h News & Sentiment",
     "🚀 Premarket Rotation Checklist",
     "📊 Market Overview",
     "🎯 Trading Themes",
@@ -291,12 +287,27 @@ tabs = st.tabs([
     "💼 Paper Trading"
 ])
 
+# TAB 0 - 24H NEWS
 with tabs[0]:
+    st.subheader("📰 Latest 24-Hour News & Sentiment")
+    st.caption("🟢 Positive • 🔴 Negative • ⚪ Neutral • Only news from the last 24 hours")
+    if not news_df.empty:
+        for _, row in news_df.iterrows():
+            emoji = "🟢" if "Bull" in row['Sentiment'] else "🔴" if "Bear" in row['Sentiment'] else "⚪"
+            with st.expander(f"{emoji} {row['Sentiment']} | {row['Asset']} | {row['Title'][:92]}{'...' if len(row['Title']) > 92 else ''} • {row['Time']}"):
+                st.write(f"**Source:** {row['Source']}")
+                st.write(f"[🔗 Read full story]({row['URL']})")
+    else:
+        st.info("Fetching latest 24h news...")
+
+# TAB 1 - CHECKLIST
+with tabs[1]:
     st.subheader("🚀 PREMARKET SECTOR ROTATION CHECKLIST")
     st.markdown(build_premarket_checklist(market_df))
     st.caption("Copy → Notes → Trade ONLY the strongest sector leaders.")
 
-with tabs[1]:
+# TAB 2 - MARKET OVERVIEW
+with tabs[2]:
     st.subheader("🗝️ Key Indices & Mag7")
     col1, col2 = st.columns([2, 1])
     with col1:
@@ -306,7 +317,8 @@ with tabs[1]:
         mag7 = market_df[market_df['Symbol'].isin(MAG7_TICKERS.values())].sort_values('Change %', ascending=False)
         st.dataframe(mag7[['Asset', 'Price', 'Change %', 'Gap %']].style.background_gradient(cmap='RdYlGn', subset=['Change %']), hide_index=True, use_container_width=True)
 
-with tabs[2]:
+# TAB 3 - THEMES
+with tabs[3]:
     cols = st.columns(4)
     for i, (name, syms) in enumerate(TRADING_THEMES.items()):
         with cols[i % 4]:
@@ -314,7 +326,8 @@ with tabs[2]:
             theme_df = market_df[market_df['Symbol'].isin(syms)]
             st.dataframe(theme_df[['Asset', 'Price', 'Change %']].style.background_gradient(cmap='RdYlGn'), hide_index=True, use_container_width=True)
 
-with tabs[3]:
+# TAB 4 - GEX
+with tabs[4]:
     user_ticker = st.text_input("GEX Ticker", value="SPY").upper().strip()
     if user_ticker:
         try:
@@ -331,17 +344,20 @@ with tabs[3]:
         except Exception as e:
             st.error(f"Options data unavailable: {e}")
 
-with tabs[4]:
+# TAB 5 - PCR
+with tabs[5]:
     st.subheader("🐳 Put/Call Volume Ratio")
     st.dataframe(get_pcr_data().style.background_gradient(subset=['PCR'], cmap='RdYlGn_r'), hide_index=True, use_container_width=True)
 
-with tabs[5]:
+# TAB 6 - ANALYST
+with tabs[6]:
     st.subheader("📊 Analyst Ratings")
     analyst_df = get_analyst_ratings()
     if not analyst_df.empty:
         st.dataframe(analyst_df.style.background_gradient(cmap='RdYlGn', subset=['Upside %']), hide_index=True, use_container_width=True)
 
-with tabs[6]:
+# TAB 7 - REGIME + ALPHA DELTA
+with tabs[7]:
     st.subheader("🔍 Market Regime Analysis")
     def get_bias(chg):
         if chg > 1.5: return "🚀 Strong Bull"
@@ -383,7 +399,8 @@ with tabs[6]:
         except:
             st.warning("RS data syncing...")
 
-with tabs[7]:
+# TAB 8 - PAPER TRADING
+with tabs[8]:
     st.subheader("💼 Paper Trading Simulator")
     if 'cash' not in st.session_state: st.session_state.cash = 100000.0
     if 'portfolio' not in st.session_state: st.session_state.portfolio = {}
@@ -447,7 +464,7 @@ with tabs[7]:
         st.dataframe(pd.DataFrame(portfolio_rows).style.background_gradient(cmap='RdYlGn', subset=['P&L $']), hide_index=True, use_container_width=True)
 
 # ────────────────────────────────────────────────
-#  LIVE ALERTS — HARDENED VWAP
+#  LIVE ALERTS
 # ────────────────────────────────────────────────
 if 'alert_log' not in st.session_state:
     st.session_state.alert_log = []
