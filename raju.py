@@ -19,7 +19,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 st.set_page_config(page_title="Alpha Terminal Pro", page_icon="🏛️", layout="wide")
 
 # SECURITY: No hardcoded fallback — will raise clear error if missing
-FINNHUB_KEY = st.secrets["FINNHUB_API_KEY"]
+FINNHUB_KEY = st.secrets["d6au4n9r01qnr27itio0d6au4n9r01qnr27itiog"]
 
 # ────────────────────────────────────────────────
 #  TICKERS & SECTOR ROTATION FRAMEWORK
