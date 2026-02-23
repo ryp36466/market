@@ -12,18 +12,17 @@ import plotly.graph_objects as go
 from scipy.stats import norm
 
 # ────────────────────────────────────────────────
-#  PAGE CONFIG + SECRETS (SAFE)
+#  PAGE CONFIG + SECRETS
 # ────────────────────────────────────────────────
 st.set_page_config(page_title="Alpha Terminal Pro", page_icon="🏛️", layout="wide")
 
 FINNHUB_KEY = st.secrets.get("FINNHUB_API_KEY", "d6au4n9r01qnr27itio0d6au4n9r01qnr27itiog")
 
 if FINNHUB_KEY == "d6au4n9r01qnr27itio0d6au4n9r01qnr27itiog":
-    st.sidebar.warning("🔑 Using DEMO Finnhub key (rate-limited). "
-                       "Add your own key in Streamlit Cloud → Settings → Secrets for full speed", icon="⚠️")
+    st.sidebar.warning("🔑 Using DEMO Finnhub key (rate-limited). Add your key in Secrets for full speed", icon="⚠️")
 
 # ────────────────────────────────────────────────
-#  TICKERS & THEMES
+#  TICKERS
 # ────────────────────────────────────────────────
 GLOBAL_TICKERS = {
     "VIX": "^VIX", "ES": "ES=F", "NQ": "NQ=F", "YM": "YM=F", "RTY": "RTY=F",
@@ -72,6 +71,27 @@ ALL_SYMBOLS = list(set(list(symbol_to_label.keys()) +
 ANALYST_SYMBOLS = sorted(list(set([s for t in TRADING_THEMES.values() for s in t])))
 
 IMPORTANT_SYMBOLS = list(MAG7_TICKERS.values()) + list(SECTOR_ETFS.values()) + ["BTC-USD", "SMCI", "PLTR", "COIN", "TSLA", "NVDA"]
+
+# ────────────────────────────────────────────────
+#  HELPERS
+# ────────────────────────────────────────────────
+def calc_gamma_vectorized(S, K, T, v, r, q, types, OI):
+    T = np.maximum(T, 1/365.0)
+    v = np.maximum(v, 0.01)
+    d1 = (np.log(S / K) + (r - q + 0.5 * v**2) * T) / (v * np.sqrt(T))
+    gamma = np.exp(-q * T) * norm.pdf(d1) / (S * v * np.sqrt(T))
+    val = gamma * OI * 100 * S
+    return np.where(types == 'call', val, -val)
+
+def get_sentiment_score(text):
+    bull = ['upbeat','growth','surge','rally','beat','buy','bullish','expansion','profit','gain','positive','jump','upgrade','raise','strong','outperform','higher','rise','soar']
+    bear = ['slump','drop','fall','miss','sell','bearish','contraction','loss','negative','inflation','fear','risk','sink','downgrade','cut','weak','underperform','lower','decline','plunge']
+    score = sum(1 for w in bull if w in text.lower()) - sum(1 for w in bear if w in text.lower())
+    if score > 2: return "🟢 Bullish", score
+    if score < -2: return "🔴 Bearish", score
+    if score > 0: return "🟡 Mild Bull", score
+    if score < 0: return "🟠 Mild Bear", score
+    return "⚪ Neutral", 0
 
 # ────────────────────────────────────────────────
 #  DATA FETCHING
@@ -145,18 +165,38 @@ def fetch_market_snapshot():
 
     return pd.DataFrame(rows), intra, hist
 
-# ────────────────────────────────────────────────
-#  24-HOUR NEWS + SENTIMENT (NEW FEATURE)
-# ────────────────────────────────────────────────
-def get_sentiment_score(text):
-    bull = ['upbeat','growth','surge','rally','beat','buy','bullish','expansion','profit','gain','positive','jump','upgrade','raise','strong','outperform','higher','rise','soar']
-    bear = ['slump','drop','fall','miss','sell','bearish','contraction','loss','negative','inflation','fear','risk','sink','downgrade','cut','weak','underperform','lower','decline','plunge']
-    score = sum(1 for w in bull if w in text.lower()) - sum(1 for w in bear if w in text.lower())
-    if score > 2: return "🟢 Bullish", score
-    if score < -2: return "🔴 Bearish", score
-    if score > 0: return "🟡 Mild Bull", score
-    if score < 0: return "🟠 Mild Bear", score
-    return "⚪ Neutral", 0
+@st.cache_data(ttl=600)
+def get_pcr_data():
+    results = []
+    for sym in ["SPY", "QQQ", "NVDA", "AAPL", "TSLA"]:
+        try:
+            tk = yf.Ticker(sym)
+            chain = tk.option_chain(tk.options[0])
+            cv = chain.calls['volume'].sum()
+            pv = chain.puts['volume'].sum()
+            pcr = pv / cv if cv > 0 else 0
+            results.append({"Asset": sym, "PCR": round(pcr, 2),
+                            "Sentiment": "🐂 Bull" if pcr < 0.7 else "🐻 Bear" if pcr > 1.1 else "⚖️ Neu"})
+        except:
+            continue
+    return pd.DataFrame(results)
+
+@st.cache_data(ttl=1800)
+def get_analyst_ratings():
+    ratings = []
+    for sym in ANALYST_SYMBOLS[:20]:
+        try:
+            info = yf.Ticker(sym).info
+            ratings.append({
+                "Asset": symbol_to_label.get(sym, sym),
+                "Consensus": info.get("recommendationKey", "N/A").replace('_', ' ').title(),
+                "Target Mean": info.get("targetMeanPrice"),
+                "Current": info.get("currentPrice"),
+                "Upside %": round(((info.get("targetMeanPrice") or 0) / (info.get("currentPrice") or 1) - 1) * 100, 1)
+            })
+        except:
+            continue
+    return pd.DataFrame(ratings)
 
 @st.cache_data(ttl=180)
 def get_latest_24h_news():
@@ -198,13 +238,7 @@ def get_latest_24h_news():
     return df
 
 # ────────────────────────────────────────────────
-#  FETCH DATA
-# ────────────────────────────────────────────────
-market_df, intra_data, hist_data = fetch_market_snapshot()
-news_df = get_latest_24h_news()
-
-# ────────────────────────────────────────────────
-#  PREMARKET CHECKLIST (NO EXTERNAL DEPENDENCY)
+#  PREMARKET CHECKLIST
 # ────────────────────────────────────────────────
 def build_premarket_checklist(df):
     if df.empty:
@@ -251,6 +285,12 @@ def build_premarket_checklist(df):
 """
 
 # ────────────────────────────────────────────────
+#  FETCH DATA
+# ────────────────────────────────────────────────
+market_df, intra_data, hist_data = fetch_market_snapshot()
+news_df = get_latest_24h_news()
+
+# ────────────────────────────────────────────────
 #  UI
 # ────────────────────────────────────────────────
 st.title("🏛️ Alpha Terminal Pro")
@@ -287,7 +327,6 @@ tabs = st.tabs([
     "💼 Paper Trading"
 ])
 
-# TAB 0 - 24H NEWS
 with tabs[0]:
     st.subheader("📰 Latest 24-Hour News & Sentiment")
     st.caption("🟢 Positive • 🔴 Negative • ⚪ Neutral • Only news from the last 24 hours")
@@ -300,13 +339,11 @@ with tabs[0]:
     else:
         st.info("Fetching latest 24h news...")
 
-# TAB 1 - CHECKLIST
 with tabs[1]:
     st.subheader("🚀 PREMARKET SECTOR ROTATION CHECKLIST")
     st.markdown(build_premarket_checklist(market_df))
     st.caption("Copy → Notes → Trade ONLY the strongest sector leaders.")
 
-# TAB 2 - MARKET OVERVIEW
 with tabs[2]:
     st.subheader("🗝️ Key Indices & Mag7")
     col1, col2 = st.columns([2, 1])
@@ -317,7 +354,6 @@ with tabs[2]:
         mag7 = market_df[market_df['Symbol'].isin(MAG7_TICKERS.values())].sort_values('Change %', ascending=False)
         st.dataframe(mag7[['Asset', 'Price', 'Change %', 'Gap %']].style.background_gradient(cmap='RdYlGn', subset=['Change %']), hide_index=True, use_container_width=True)
 
-# TAB 3 - THEMES
 with tabs[3]:
     cols = st.columns(4)
     for i, (name, syms) in enumerate(TRADING_THEMES.items()):
@@ -326,7 +362,6 @@ with tabs[3]:
             theme_df = market_df[market_df['Symbol'].isin(syms)]
             st.dataframe(theme_df[['Asset', 'Price', 'Change %']].style.background_gradient(cmap='RdYlGn'), hide_index=True, use_container_width=True)
 
-# TAB 4 - GEX
 with tabs[4]:
     user_ticker = st.text_input("GEX Ticker", value="SPY").upper().strip()
     if user_ticker:
@@ -344,19 +379,16 @@ with tabs[4]:
         except Exception as e:
             st.error(f"Options data unavailable: {e}")
 
-# TAB 5 - PCR
 with tabs[5]:
     st.subheader("🐳 Put/Call Volume Ratio")
     st.dataframe(get_pcr_data().style.background_gradient(subset=['PCR'], cmap='RdYlGn_r'), hide_index=True, use_container_width=True)
 
-# TAB 6 - ANALYST
 with tabs[6]:
     st.subheader("📊 Analyst Ratings")
     analyst_df = get_analyst_ratings()
     if not analyst_df.empty:
         st.dataframe(analyst_df.style.background_gradient(cmap='RdYlGn', subset=['Upside %']), hide_index=True, use_container_width=True)
 
-# TAB 7 - REGIME + ALPHA DELTA
 with tabs[7]:
     st.subheader("🔍 Market Regime Analysis")
     def get_bias(chg):
@@ -399,7 +431,6 @@ with tabs[7]:
         except:
             st.warning("RS data syncing...")
 
-# TAB 8 - PAPER TRADING
 with tabs[8]:
     st.subheader("💼 Paper Trading Simulator")
     if 'cash' not in st.session_state: st.session_state.cash = 100000.0
