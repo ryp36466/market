@@ -4,8 +4,7 @@ pandas
 numpy
 aiohttp
 requests
-beautifulsoup4
 plotly
 scipy
 streamlit-autorefresh
-pytz
+matplotlib
