@@ -157,6 +157,66 @@ def get_analyst_ratings():
 # ────────────────────────────────────────────────
 #  4. UI LAYOUT
 # ────────────────────────────────────────────────
+# ────────────────────────────────────────────────
+#  MORNING BATTLE PLAN (Strategic Summary)
+# ────────────────────────────────────────────────
+
+def generate_battle_plan(df, macro_news):
+    # 1. Identify Market Pulse
+    spy_row = df[df['Symbol'] == 'SPY']
+    vix_row = df[df['Symbol'] == '^VIX']
+    
+    spy_chg = spy_row['Change %'].values[0] if not spy_row.empty else 0
+    vix_val = vix_row['Price'].values[0] if not vix_row.empty else 20
+    
+    # 2. Identify Top Gappers (Alpha)
+    top_gappers = df.sort_values('Gap %', ascending=False).head(3)
+    gap_names = ", ".join(top_gappers['Symbol'].tolist())
+    
+    # 3. Macro Sentiment (Heuristic)
+    macro_titles = " ".join([item.get('Title', '').lower() for item in macro_news[:5]])
+    is_fed = "fed" in macro_titles or "inflation" in macro_titles
+    is_geo = "tariff" in macro_titles or "war" in macro_titles or "china" in macro_titles
+    
+    # 4. Synthesize logic
+    # Sentence 1: Market State
+    if spy_chg > 0.5: mood = "The market is showing strong **Risk-On** appetite with a gap up."
+    elif spy_chg < -0.5: mood = "The market is in **Defensive Mode** with significant selling pressure."
+    else: mood = "We are looking at a **Neutral/Chop Open** with low directional conviction."
+    
+    # Sentence 2: The Catalyst
+    if is_fed: catalyst = "Macro focus is centered on **Central Bank policy** and inflation data."
+    elif is_geo: catalyst = "Geopolitical headlines and **trade tensions** are driving the narrative."
+    else: catalyst = "Action is largely **Sector-Specific**, driven by earnings and individual catalysts."
+    
+    # Sentence 3: Tactical Execution
+    if vix_val > 25: tactic = "High Volatility detected. **Tighten stops** and avoid oversized positions."
+    elif not top_gappers.empty and top_gappers['Gap %'].iloc[0] > 2: 
+        tactic = f"Watch **{gap_names}** for a 'Gap & Go' setup if opening ranges hold."
+    else: tactic = "Patience is key; wait for the 15-minute opening range to define the day's trend."
+
+    return f"{mood} {catalyst} {tactic}"
+
+# ────────────────────────────────────────────────
+#  UI: BATTLE PLAN BOX
+# ────────────────────────────────────────────────
+
+# Place this right under your Title/Header
+st.markdown("---")
+with st.container():
+    col_plan, col_vitals = st.columns([3, 1])
+    
+    with col_plan:
+        st.subheader("📝 Morning Battle Plan")
+        plan_text = generate_battle_plan(market_df, macro_news if 'macro_news' in locals() else [])
+        st.info(plan_text)
+        
+    with col_vitals:
+        st.subheader("📡 Vitals")
+        vol_pulse = "🔴 High" if vix_val > 22 else "🟢 Low" if vix_val < 15 else "🟡 Med"
+        st.write(f"**Volatility Pulse:** {vol_pulse}")
+        st.write(f"**Top Gapper:** {top_gappers['Symbol'].iloc[0] if not top_gappers.empty else 'N/A'}")
+
 
 market_df, intra_data, hist_data = fetch_market_snapshot()
 st.title("🏛️ Alpha Terminal Pro")
