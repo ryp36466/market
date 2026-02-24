@@ -170,9 +170,6 @@ def fetch_market_snapshot():
             continue
     return pd.DataFrame(rows), intra, hist_data
 
-# Earnings, PCR, Gamma, News, Analyst functions (kept exactly as before)
-# ... (I kept them short here for space — they are the same as in the previous full code)
-
 def get_earnings_calendar_finnhub(date_str):
     url = f"https://finnhub.io/api/v1/calendar/earnings?from={date_str}&to={date_str}&token={FINNHUB_API_KEY}"
     try:
@@ -252,8 +249,6 @@ def calc_gamma_vectorized(S, K, T, v, r, q, types, OI):
 
 @st.cache_data(ttl=180)
 def get_theme_stock_news(max_stocks=30):
-    # ... (same as before - omitted for brevity, copy from previous full code if needed)
-    # (It is unchanged)
     news_items = []
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     for sym in ANALYST_SYMBOLS[:max_stocks]:
@@ -291,7 +286,6 @@ def get_theme_stock_news(max_stocks=30):
 
 @st.cache_data(ttl=180)
 def get_mag7_hot_news():
-    # ... (same as before)
     news_items = []
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     for sym in MAG7_HOT_SYMBOLS:
@@ -351,7 +345,6 @@ def get_macro_news():
 
 @st.cache_data(ttl=1800)
 def get_analyst_ratings():
-    # ... (same as before)
     ratings = []
     rating_map = {"strong_buy": ("🚀 Strong Buy", 5), "buy": ("🟢 Buy", 4), "hold": ("⚖️ Hold", 3), "sell": ("🔴 Sell", 2), "strong_sell": ("💥 Strong Sell", 1)}
     for sym in ANALYST_SYMBOLS:
@@ -378,7 +371,7 @@ def get_analyst_ratings():
     return pd.DataFrame(ratings)
 
 # ────────────────────────────────────────────────
-#  NEW: FINNHUB DAILY PULSE FUNCTIONS
+#  FINNHUB DAILY PULSE
 # ────────────────────────────────────────────────
 @st.cache_data(ttl=60)
 def get_finnhub_general_news():
@@ -455,16 +448,14 @@ with col_refresh[1]:
         st.cache_data.clear()
         st.rerun()
 
-# TABS WITH NEW FINNHUB PULSE TAB
+# TABS
 tab_overview, tab_sectors, tab_themes, tab_rel_strength, tab_gex, tab_options, tab_earnings, tab_analyst, tab_macro, tab_finnhub, tab_news, tab_bias = st.tabs([
     "📈 Market Overview", "🔥 Alpha Sectors", "🎯 Trading Themes", "⚖️ Relative Strength",
     "📊 GEX + Gamma Flip", "🐳 Options", "🎯 Earnings", "📊 Analyst Ratings (Yahoo)",
     "🌍 Macro News", "🌐 Finnhub Daily Pulse", "📰 High-Impact News", "🔍 Bias & Regime"
 ])
 
-# All tabs (full code)
 with tab_overview:
-    # (same as before)
     st.subheader("🗝️ Key Indices & Futures")
     key_assets = ["VIX", "ES (S&P 500 Fut)", "NQ (Nasdaq Fut)", "YM (Dow Fut)", "RTY (Russell 2000)", "SPY", "QQQ", "S&P 500"]
     key_df = market_df[market_df['Asset'].isin(key_assets)][['Asset', 'Price', 'Gap %', 'Change %', 'RVOL']].round(2)
@@ -479,7 +470,6 @@ with tab_overview:
                  hide_index=True, use_container_width=True)
 
 with tab_sectors:
-    # (same)
     col_a, col_b = st.columns(2)
     with col_a:
         st.subheader("Major ETFs")
@@ -517,16 +507,13 @@ with tab_rel_strength:
         sector_symbols = list(SECTOR_TICKERS.values())
         plot_df = hist_data['Close'][[benchmark] + sector_symbols].dropna(how='all')
         normalized_df = (plot_df / plot_df.iloc[0] - 1) * 100
-        
         melt_df = normalized_df.reset_index()
         date_col = melt_df.columns[0]
         melt_df = melt_df.rename(columns={date_col: 'Date'})
-        
         fig = px.line(melt_df.melt(id_vars='Date', var_name='Ticker', value_name='Perf %'),
                       x='Date', y='Perf %', color='Ticker', template="plotly_dark", height=500)
         fig.update_traces(patch={"line": {"width": 4, "dash": "dot"}}, selector={"legendgroup": "SPY"})
         st.plotly_chart(fig, use_container_width=True)
-        
         st.write("### Alpha Delta (Current vs SPY)")
         current_perf = normalized_df.iloc[-1]
         rel_perf = (current_perf - current_perf[benchmark]).round(2).reset_index()
@@ -544,16 +531,13 @@ with tab_rel_strength:
         mag7_symbols = list(MAG7_TICKERS.values())
         plot_df = hist_data['Close'][[benchmark] + mag7_symbols].dropna(how='all')
         normalized_df = (plot_df / plot_df.iloc[0] - 1) * 100
-        
         melt_df = normalized_df.reset_index()
         date_col = melt_df.columns[0]
         melt_df = melt_df.rename(columns={date_col: 'Date'})
-        
         fig = px.line(melt_df.melt(id_vars='Date', var_name='Ticker', value_name='Perf %'),
                       x='Date', y='Perf %', color='Ticker', template="plotly_dark", height=500)
         fig.update_traces(patch={"line": {"width": 4, "dash": "dot"}}, selector={"legendgroup": "QQQ"})
         st.plotly_chart(fig, use_container_width=True)
-        
         st.write("### Alpha Delta (Current vs QQQ)")
         current_perf = normalized_df.iloc[-1]
         rel_perf = (current_perf - current_perf[benchmark]).round(2).reset_index()
@@ -567,9 +551,7 @@ with tab_rel_strength:
 with tab_gex:
     st.subheader("📊 Gamma Exposure (GEX) + Gamma Flip Level")
     st.caption("Front 3 expirations • Green = Long Gamma (stabilizing) • Red = Short Gamma (amplifying) • Yellow line = **Gamma Flip**")
-    
     user_ticker = st.text_input("Enter Ticker for GEX Analysis", value="SPY").upper().strip()
-    
     if user_ticker:
         try:
             tk = yf.Ticker(user_ticker)
@@ -578,36 +560,24 @@ with tab_gex:
                 st.warning("No options data found.")
             else:
                 spot = round(tk.history(period="1d")['Close'].iloc[-1], 2)
-                
                 all_chains = []
                 for exp in options[:3]:
                     ch = tk.option_chain(exp)
-                    all_chains.extend([
-                        ch.calls.assign(type='call', exp=exp),
-                        ch.puts.assign(type='put', exp=exp)
-                    ])
+                    all_chains.extend([ch.calls.assign(type='call', exp=exp), ch.puts.assign(type='put', exp=exp)])
                 df_g = pd.concat(all_chains, ignore_index=True)
-                
                 df_g['impliedVolatility'] = df_g['impliedVolatility'].fillna(0.01)
                 df_g['impliedVolatility'] = np.clip(df_g['impliedVolatility'], 0.01, 3.0)
                 df_g['openInterest'] = df_g['openInterest'].fillna(0)
-                
                 now = datetime.datetime.now(datetime.timezone.utc)
                 exp_datetime = pd.to_datetime(df_g['exp']).dt.tz_localize('UTC') + pd.Timedelta(hours=16)
                 df_g['dte'] = (exp_datetime - now).dt.total_seconds() / (365 * 24 * 3600)
                 df_g['dte'] = np.maximum(df_g['dte'], 1/365.0)
-                
-                df_g['GEX'] = calc_gamma_vectorized(
-                    spot, df_g['strike'].values, df_g['dte'].values,
-                    df_g['impliedVolatility'].values, 0.04, 0.01,
-                    df_g['type'].values, df_g['openInterest'].values
-                )
-                
+                df_g['GEX'] = calc_gamma_vectorized(spot, df_g['strike'].values, df_g['dte'].values,
+                                                    df_g['impliedVolatility'].values, 0.04, 0.01,
+                                                    df_g['type'].values, df_g['openInterest'].values)
                 df_agg = (df_g.groupby('strike')['GEX'].sum() / 1e6).sort_index()
-                
                 strikes = np.asarray(df_agg.index)
                 gex_vals = np.asarray(df_agg.values)
-                
                 flip_level = spot
                 sign_changes = np.where(np.sign(gex_vals[:-1]) != np.sign(gex_vals[1:]))[0]
                 if len(sign_changes) > 0:
@@ -616,50 +586,27 @@ with tab_gex:
                     x2, y2 = strikes[i+1], gex_vals[i+1]
                     flip_level = x1 - y1 * (x2 - x1) / (y2 - y1) if y2 != y1 else x1
                 flip_level = round(flip_level)
-                
                 col1, col2, col3 = st.columns(3)
                 with col1:
-                    st.metric(
-                        label="🔄 **Gamma Flip Level**",
-                        value=f"${flip_level:,}",
-                        delta=f"Spot is {((spot - flip_level)/flip_level*100):+.1f}% above flip"
-                    )
+                    st.metric(label="🔄 **Gamma Flip Level**", value=f"${flip_level:,}",
+                              delta=f"Spot is {((spot - flip_level)/flip_level*100):+.1f}% above flip")
                 with col2:
                     total_gex = round(df_agg.sum(), 1)
-                    st.metric(
-                        label="Net GEX",
-                        value=f"{total_gex}M",
-                        delta="🟢 Long Gamma (pinning likely)" if total_gex > 0 else "🔴 Short Gamma (volatile)"
-                    )
+                    st.metric(label="Net GEX", value=f"{total_gex}M",
+                              delta="🟢 Long Gamma (pinning likely)" if total_gex > 0 else "🔴 Short Gamma (volatile)")
                 with col3:
                     st.metric("Current Spot", f"${spot:,.2f}")
-                
-                st.caption("**Gamma Flip** = first strike where net GEX changes sign. "
-                          "Above flip = dealers long gamma (dampens moves). Below = short gamma (amplifies moves).")
-                
+                st.caption("**Gamma Flip** = first strike where net GEX changes sign. Above flip = dealers long gamma (dampens moves). Below = short gamma (amplifies moves).")
                 fig = go.Figure()
-                fig.add_trace(go.Bar(
-                    x=df_agg.index,
-                    y=df_agg.values,
-                    marker_color=['#00ff88' if x > 0 else '#ff4444' for x in df_agg.values],
-                    name="GEX ($M)"
-                ))
-                fig.add_vline(x=spot, line_dash="dash", line_color="white",
-                              annotation_text=f"Spot ${spot}", annotation_position="top")
+                fig.add_trace(go.Bar(x=df_agg.index, y=df_agg.values,
+                                     marker_color=['#00ff88' if x > 0 else '#ff4444' for x in df_agg.values], name="GEX ($M)"))
+                fig.add_vline(x=spot, line_dash="dash", line_color="white", annotation_text=f"Spot ${spot}", annotation_position="top")
                 fig.add_vline(x=flip_level, line_dash="dot", line_color="#ffd700", line_width=3,
                               annotation_text=f"🔄 GAMMA FLIP ${flip_level}",
                               annotation_position="bottom right" if flip_level < spot else "top left")
-                
-                fig.update_layout(
-                    template="plotly_dark",
-                    title=f"{user_ticker} Net Gamma Exposure + Gamma Flip Level",
-                    height=560,
-                    xaxis_title="Strike Price",
-                    yaxis_title="Gamma Exposure ($ Millions)",
-                    hovermode="x unified"
-                )
+                fig.update_layout(template="plotly_dark", title=f"{user_ticker} Net Gamma Exposure + Gamma Flip Level",
+                                  height=560, xaxis_title="Strike Price", yaxis_title="Gamma Exposure ($ Millions)", hovermode="x unified")
                 st.plotly_chart(fig, use_container_width=True)
-                
         except Exception as e:
             st.error(f"GEX Error: {e}")
             st.info("Try SPY, QQQ, NVDA, TSLA — most liquid names work best.")
@@ -684,40 +631,21 @@ with tab_earnings:
 with tab_analyst:
     st.subheader("📊 Analyst Ratings & Price Targets (Yahoo Finance)")
     st.caption("Live consensus, targets & analyst count • Updated every 30 min • No scraping")
-    
     analyst_df = get_analyst_ratings()
-    
     if not analyst_df.empty:
         analyst_df = analyst_df.dropna(subset=['Bull Score']).sort_values('Bull Score', ascending=False)
-        
         def rating_color(val):
-            if "Strong Buy" in val or "Buy" in val: 
-                return 'background-color: #00cc66; color: black; font-weight: bold;'
-            if "Hold" in val: 
-                return 'background-color: #ffcc66; color: black;'
-            if "Sell" in val: 
-                return 'background-color: #ff6666; color: white; font-weight: bold;'
+            if "Strong Buy" in val or "Buy" in val: return 'background-color: #00cc66; color: black; font-weight: bold;'
+            if "Hold" in val: return 'background-color: #ffcc66; color: black;'
+            if "Sell" in val: return 'background-color: #ff6666; color: white; font-weight: bold;'
             return ''
-        
         st.dataframe(
-            analyst_df[[
-                "Asset", "Symbol", "Consensus", "Bull Score", "Target Mean", 
-                "Target High", "Target Low", "Current Price", "Upside %", "Analyst Count"
-            ]]
-            .style
-            .applymap(rating_color, subset=['Consensus'])
+            analyst_df[["Asset", "Symbol", "Consensus", "Bull Score", "Target Mean", "Target High", "Target Low", "Current Price", "Upside %", "Analyst Count"]]
+            .style.applymap(rating_color, subset=['Consensus'])
             .background_gradient(cmap='RdYlGn', subset=['Upside %', 'Bull Score'])
-            .format({
-                "Target Mean": "${:,.2f}",
-                "Target High": "${:,.2f}",
-                "Target Low": "${:,.2f}",
-                "Current Price": "${:,.2f}",
-                "Upside %": "{:+.1f}%"
-            }),
-            hide_index=True,
-            use_container_width=True
+            .format({"Target Mean": "${:,.2f}", "Target High": "${:,.2f}", "Target Low": "${:,.2f}", "Current Price": "${:,.2f}", "Upside %": "{:+.1f}%"}),
+            hide_index=True, use_container_width=True
         )
-        
         st.caption("**Target Range** shown as High / Low. **Bull Score** 5 = Strong Buy → 1 = Strong Sell")
     else:
         st.info("Fetching latest analyst consensus from Yahoo Finance...")
@@ -725,15 +653,11 @@ with tab_analyst:
 with tab_macro:
     st.subheader("🌍 Macro & Market-Moving News")
     st.caption("High-impact news affecting the broader market • Fed, Trump, geopolitics, economic data")
-    
     macro_news = get_macro_news()
-    
     if macro_news:
         total_score = 0
         trump_news = [item for item in macro_news if any(k in item.get('Title','').lower() for k in ['trump', 'president', 'white house', 'tariff', 'election', 'fed', 'inflation'])]
-        
         col1, col2 = st.columns(2)
-        
         with col1:
             st.markdown("### 📈 All Macro Headlines")
             for item in macro_news[:15]:
@@ -742,7 +666,6 @@ with tab_macro:
                 with st.expander(f"{label} | {item.get('Title')[:85]}{'...' if len(item.get('Title','')) > 85 else ''}"):
                     st.write(f"**Source:** {item.get('Source')} | {item.get('Date')}")
                     st.write(f"[🔗 Read]({item.get('URL')})")
-        
         with col2:
             st.markdown("### 🇺🇸 Trump / Political Impact")
             if trump_news:
@@ -753,14 +676,9 @@ with tab_macro:
                         st.write(f"[🔗 Read]({item.get('URL')})")
             else:
                 st.info("No major Trump-related headlines right now")
-        
-        st.sidebar.metric("Macro Sentiment Pulse", total_score,
-                         delta="Bullish" if total_score >= 0 else "Bearish")
+        st.sidebar.metric("Macro Sentiment Pulse", total_score, delta="Bullish" if total_score >= 0 else "Bearish")
     else:
         st.info("Fetching macro news from Finviz...")
-
-with tab_extremes:
-    st.info("ATH/ATL scanner – coming soon")
 
 with tab_finnhub:
     st.subheader("🌐 Finnhub Daily Pulse")
@@ -782,23 +700,15 @@ with tab_finnhub:
         st.markdown("### 📅 Economic Calendar (Today)")
         econ_df = get_finnhub_econ_calendar()
         if not econ_df.empty:
-            st.dataframe(
-                econ_df.style.background_gradient(cmap='RdYlGn_r', subset=['Impact']),
-                hide_index=True, use_container_width=True
-            )
+            st.dataframe(econ_df.style.background_gradient(cmap='RdYlGn_r', subset=['Impact']), hide_index=True, use_container_width=True)
             st.caption("🔴 HIGH = major movers (CPI, FOMC, NFP, GDP, Unemployment, Rate Decision...)")
         else:
             st.info("No events today or fetching data...")
 
-# ────────────────────────────────────────────────
-#  HIGH-IMPACT NEWS TAB
-# ────────────────────────────────────────────────
 with tab_news:
     st.subheader("🔥 Hot Mag7 + SPY/QQQ News")
     st.caption("**Market-moving** news for the most important assets (AAPL, MSFT, NVDA, AMZN, GOOGL, META, TSLA, SPY, QQQ) • High-impact filter • Updated live")
-
     hot_df = get_mag7_hot_news()
-    
     if not hot_df.empty:
         for _, row in hot_df.iterrows():
             impact_emoji = "🔥" if row['Impact'] >= 5 else "⚡" if row['Impact'] >= 3 else "📈"
@@ -807,19 +717,13 @@ with tab_news:
                 st.write(f"[🔗 Read full story]({row['URL']})")
     else:
         st.info("Fetching hot Mag7 + SPY/QQQ news from Finviz...")
-
     st.markdown("---")
-
     st.subheader("📰 High-Impact Theme Stocks News")
     st.caption("Filtered for **market-moving** events across all trading themes • Earnings, Analyst Actions, M&A, Lawsuits, Major Moves")
-
     news_df = get_theme_stock_news()
-    
     if not news_df.empty:
         total_score = news_df['Score'].sum()
-        st.sidebar.metric("Theme Sentiment Pulse", total_score,
-                         delta="Positive" if total_score >= 0 else "Negative")
-        
+        st.sidebar.metric("Theme Sentiment Pulse", total_score, delta="Positive" if total_score >= 0 else "Negative")
         for _, row in news_df.iterrows():
             impact_emoji = "🔥" if row['Impact'] >= 5 else "⚡" if row['Impact'] >= 3 else "📈"
             with st.expander(f"{impact_emoji} {row['Sentiment']} | {row['Asset']} | {row['Title'][:92]}{'...' if len(row['Title']) > 92 else ''} • {row['Time']}"):
@@ -831,20 +735,16 @@ with tab_news:
 with tab_bias:
     st.subheader("🔍 Market Bias & Gap Analysis")
     st.caption("Bullish / Bearish / Chop regime based on **today's price vs yesterday close** • Gap % = (open - yesterday close)")
-
     key_assets = ["VIX", "ES (S&P 500 Fut)", "NQ (Nasdaq Fut)", "YM (Dow Fut)", 
                   "RTY (Russell 2000)", "SPY", "QQQ", "S&P 500"]
     bias_df = market_df[market_df['Asset'].isin(key_assets + list(MAG7_TICKERS.keys()))].copy()
-    
     def get_bias(chg):
         if chg >= 1.8:   return "🚀 Strong Bullish"
         elif chg >= 0.6: return "🟢 Bullish"
         elif chg >= -0.6:return "⚖️ Chop / Neutral"
         elif chg >= -1.8:return "🔴 Bearish"
         else:            return "💥 Strong Bearish"
-    
     bias_df['Bias'] = bias_df['Change %'].apply(get_bias)
-    
     def style_bias(val):
         if "Strong Bullish" in val or "Bullish" in val:
             return 'background-color: #00cc66; color: black; font-weight: bold'
@@ -853,17 +753,13 @@ with tab_bias:
         if "Chop" in val:
             return 'background-color: #555555; color: white'
         return ''
-    
     st.dataframe(
         bias_df[['Asset', 'Price', 'Gap %', 'Change %', 'Bias', 'RVOL']].round(2)
-        .style
-        .applymap(style_bias, subset=['Bias'])
+        .style.applymap(style_bias, subset=['Bias'])
         .background_gradient(cmap='RdYlGn', subset=['Change %', 'Gap %'])
         .format({"Gap %": "{:+.2f}%", "Change %": "{:+.2f}%", "RVOL": "{:.2f}x"}),
-        hide_index=True,
-        use_container_width=True
+        hide_index=True, use_container_width=True
     )
-    
     st.info("**Regime Logic**: >1.8% = Strong Bull | 0.6–1.8% = Bull | ±0.6% = Chop | -1.8 to -0.6 = Bear | <-1.8% = Strong Bear")
 
-st_autorefresh(interval=45000, key="global_refresh")   # 45-second live refresh
+st_autorefresh(interval=45000, key="global_refresh")
