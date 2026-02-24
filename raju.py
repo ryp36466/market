@@ -343,33 +343,86 @@ def get_macro_news():
         except:
             return []
 
-@st.cache_data(ttl=1800)
-def get_analyst_ratings():
+# ────────────────────────────────────────────────
+#  FINNHUB ANALYST RATINGS (NEW - REPLACES YAHOO)
+# ────────────────────────────────────────────────
+@st.cache_data(ttl=3600)
+def get_finnhub_analyst_ratings():
     ratings = []
-    rating_map = {"strong_buy": ("🚀 Strong Buy", 5), "buy": ("🟢 Buy", 4), "hold": ("⚖️ Hold", 3), "sell": ("🔴 Sell", 2), "strong_sell": ("💥 Strong Sell", 1)}
-    for sym in ANALYST_SYMBOLS:
+    for sym in ANALYST_SYMBOLS[:60]:  # limit to stay under free-tier rate limit
         try:
-            tk = yf.Ticker(sym)
-            info = tk.get_info()
-            raw_key = info.get("recommendationKey", None)
-            display_name, bull_score = rating_map.get(raw_key, ("—", 0))
-            target_mean = info.get("targetMeanPrice")
-            current = info.get("currentPrice")
-            target_high = info.get("targetHighPrice")
-            target_low = info.get("targetLowPrice")
-            analyst_count = info.get("numberOfAnalystOpinions", 0)
-            upside = ((target_mean - current) / current * 100) if target_mean and current else None
+            # 1. Recommendation Trends
+            url_rec = f"https://finnhub.io/api/v1/stock/recommendation?symbol={sym}&token={FINNHUB_API_KEY}"
+            r_rec = requests.get(url_rec, timeout=10)
+            r_rec.raise_for_status()
+            rec_data = r_rec.json()
+            if not rec_data:
+                continue
+            latest = rec_data[0]
+            strong_buy = latest.get('strongBuy', 0)
+            buy = latest.get('buy', 0)
+            hold = latest.get('hold', 0)
+            sell = latest.get('sell', 0)
+            strong_sell = latest.get('strongSell', 0)
+            total = strong_buy + buy + hold + sell + strong_sell
+            if total == 0:
+                continue
+            score = (strong_buy*5 + buy*4 + hold*3 + sell*2 + strong_sell*1) / total
+            if score >= 4.5:
+                consensus = "🚀 Strong Buy"
+                bull_score = 5
+            elif score >= 3.5:
+                consensus = "🟢 Buy"
+                bull_score = 4
+            elif score >= 2.5:
+                consensus = "⚖️ Hold"
+                bull_score = 3
+            elif score >= 1.5:
+                consensus = "🔴 Sell"
+                bull_score = 2
+            else:
+                consensus = "💥 Strong Sell"
+                bull_score = 1
+
+            # 2. Price Target
+            url_pt = f"https://finnhub.io/api/v1/stock/price-target?symbol={sym}&token={FINNHUB_API_KEY}"
+            r_pt = requests.get(url_pt, timeout=10)
+            r_pt.raise_for_status()
+            pt = r_pt.json()
+            target_mean = pt.get('targetMean')
+            target_high = pt.get('targetHigh')
+            target_low = pt.get('targetLow')
+            num_analysts = pt.get('numberOfAnalysts', total)
+
+            # Current price from our snapshot
+            current_price = market_df[market_df['Symbol'] == sym]['Price'].iloc[0] if not market_df[market_df['Symbol'] == sym].empty else None
+            upside = ((target_mean - current_price) / current_price * 100) if target_mean and current_price else None
+
             ratings.append({
-                "Asset": symbol_to_label.get(sym, sym), "Symbol": sym, "Consensus": display_name,
-                "Bull Score": bull_score, "Target Mean": target_mean, "Target High": target_high,
-                "Target Low": target_low, "Current Price": current,
+                "Asset": symbol_to_label.get(sym, sym),
+                "Symbol": sym,
+                "Consensus": consensus,
+                "Bull Score": bull_score,
+                "Strong Buy": strong_buy,
+                "Buy": buy,
+                "Hold": hold,
+                "Sell": sell,
+                "Strong Sell": strong_sell,
+                "Total Analysts": num_analysts,
+                "Target Mean": target_mean,
+                "Target High": target_high,
+                "Target Low": target_low,
+                "Current Price": current_price,
                 "Upside %": round(upside, 1) if upside is not None else None,
-                "Analyst Count": int(analyst_count)
+                "Period": latest.get('period', '—')
             })
         except:
             continue
     return pd.DataFrame(ratings)
 
+# ────────────────────────────────────────────────
+#  FINNHUB DAILY PULSE
+# ────────────────────────────────────────────────
 @st.cache_data(ttl=60)
 def get_finnhub_general_news():
     url = f"https://finnhub.io/api/v1/news?category=general&token={FINNHUB_API_KEY}"
@@ -453,21 +506,19 @@ else:
 
 st.sidebar.markdown("---")
 
-# Manual Refresh
 col_refresh = st.columns([7, 1])
 with col_refresh[1]:
     if st.button("🔄 Refresh Now", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 
-# TABS (no more tab_extremes)
+# TABS
 tab_overview, tab_sectors, tab_themes, tab_rel_strength, tab_gex, tab_options, tab_earnings, tab_analyst, tab_macro, tab_finnhub, tab_news, tab_bias = st.tabs([
     "📈 Market Overview", "🔥 Alpha Sectors", "🎯 Trading Themes", "⚖️ Relative Strength",
-    "📊 GEX + Gamma Flip", "🐳 Options", "🎯 Earnings", "📊 Analyst Ratings (Yahoo)",
+    "📊 GEX + Gamma Flip", "🐳 Options", "🎯 Earnings", "📊 Analyst Ratings (Finnhub)",
     "🌍 Macro News", "🌐 Finnhub Daily Pulse", "📰 High-Impact News", "🔍 Bias & Regime"
 ])
 
-# All tabs (full content)
 with tab_overview:
     st.subheader("🗝️ Key Indices & Futures")
     key_assets = ["VIX", "ES (S&P 500 Fut)", "NQ (Nasdaq Fut)", "YM (Dow Fut)", "RTY (Russell 2000)", "SPY", "QQQ", "S&P 500"]
@@ -642,23 +693,25 @@ with tab_earnings:
         st.dataframe(df.style.applymap(highlight_beats, subset=['EPS Beat', 'Rev Beat']), hide_index=True, use_container_width=True)
 
 with tab_analyst:
-    st.subheader("📊 Analyst Ratings & Price Targets (Yahoo Finance)")
-    st.caption("Live consensus, targets & analyst count • Updated every 30 min • No scraping")
-    analyst_df = get_analyst_ratings()
+    st.subheader("📊 Analyst Ratings & Price Targets (Finnhub)")
+    st.caption("Live recommendation trends + price targets from Finnhub • Updated hourly")
+
+    analyst_df = get_finnhub_analyst_ratings()
+
     if not analyst_df.empty:
-        analyst_df = analyst_df.dropna(subset=['Bull Score']).sort_values('Bull Score', ascending=False)
+        analyst_df = analyst_df.sort_values('Bull Score', ascending=False)
         def rating_color(val):
-            if "Strong Buy" in val or "Buy" in val: 
-                return 'background-color: #00cc66; color: black; font-weight: bold;'
-            if "Hold" in val: 
-                return 'background-color: #ffcc66; color: black;'
-            if "Sell" in val: 
-                return 'background-color: #ff6666; color: white; font-weight: bold;'
+            if "Strong Buy" in val: return 'background-color: #00cc66; color: black; font-weight: bold;'
+            if "Buy" in val: return 'background-color: #00cc66; color: black;'
+            if "Hold" in val: return 'background-color: #ffcc66; color: black;'
+            if "Sell" in val: return 'background-color: #ff6666; color: white;'
             return ''
         st.dataframe(
             analyst_df[[
-                "Asset", "Symbol", "Consensus", "Bull Score", "Target Mean", 
-                "Target High", "Target Low", "Current Price", "Upside %", "Analyst Count"
+                "Asset", "Symbol", "Consensus", "Bull Score",
+                "Strong Buy", "Buy", "Hold", "Sell", "Strong Sell",
+                "Total Analysts", "Target Mean", "Target High", "Target Low",
+                "Current Price", "Upside %"
             ]]
             .style
             .applymap(rating_color, subset=['Consensus'])
@@ -673,9 +726,9 @@ with tab_analyst:
             hide_index=True,
             use_container_width=True
         )
-        st.caption("**Target Range** shown as High / Low. **Bull Score** 5 = Strong Buy → 1 = Strong Sell")
+        st.caption("**Consensus** based on latest analyst recommendations • **Upside %** from mean price target")
     else:
-        st.info("Fetching latest analyst consensus from Yahoo Finance...")
+        st.info("Fetching latest analyst ratings from Finnhub...")
 
 with tab_macro:
     st.subheader("🌍 Macro & Market-Moving News")
