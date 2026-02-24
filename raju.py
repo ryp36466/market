@@ -12,20 +12,20 @@ import plotly.express as px
 import plotly.graph_objects as go
 from scipy.stats import norm
 
-# ────────────────────────────────────────────────
-#  PAGE CONFIG
-# ────────────────────────────────────────────────
+# ================================================
+# PAGE CONFIG
+# ================================================
 st.set_page_config(page_title="Alpha Terminal Pro", page_icon="🏛️", layout="wide")
 
-# ────────────────────────────────────────────────
-#  API KEYS
-# ────────────────────────────────────────────────
+# ================================================
+# API KEYS
+# ================================================
 FINNHUB_API_KEY = "d6au4n9r01qnr27itio0d6au4n9r01qnr27itiog"
 ALPHA_VANTAGE_API_KEY = "Q6Z6I3QPW56O7NWP"
 
-# ────────────────────────────────────────────────
-#  TICKER CONFIGS + TRADING THEMES
-# ────────────────────────────────────────────────
+# ================================================
+# TICKER CONFIGS + TRADING THEMES
+# ================================================
 USER_HOT_LIST = [
     "NET", "RDDT", "CRCL", "CRWD", "CRM", "BMNR", "UNH", "SOFI", "APP", "ORCL",
     "RBRK", "MRVL", "ARM", "COIN", "SMCI", "IBM", "AAL", "BA", "SHOP", "LMND",
@@ -76,7 +76,7 @@ TRADING_THEMES = {
     "🔥 USER HOT LIST": USER_HOT_LIST
 }
 
-# Build mapping
+# Build symbol → label mapping
 symbol_to_label = {}
 for d in [GLOBAL_TICKERS, SECTOR_TICKERS, NEO_CLOUD_TICKERS, MAG7_TICKERS]:
     for label, sym in d.items():
@@ -98,9 +98,9 @@ HUGE_CAP_SYMBOLS = {
     'HD', 'COST', 'NFLX', 'DIS', 'PFE', 'MRK', 'LLY', 'AVGO'
 }
 
-# ────────────────────────────────────────────────
-#  NEWS FILTER + HELPERS
-# ────────────────────────────────────────────────
+# ================================================
+# NEWS FILTER + HELPERS
+# ================================================
 HIGH_IMPACT_KEYWORDS = ["earnings", "eps", "revenue", "guidance", "outlook", "beat", "miss", "raised", "cut", "lowered", "hike", "upgrade", "downgrade", "price target", "pt raised", "pt cut", "acquire", "acquisition", "merger", "buyout", "takeover", "deal", "partnership", "sec", "doj", "lawsuit", "investigation", "probe", "settlement", "antitrust", "sued", "fed", "inflation", "tariff", "sanctions", "regulation", "surge", "plunge", "soar", "collapse", "spike", "jump", "tumble", "slump", "crash", "%"]
 LOW_IMPACT_KEYWORDS = ["interview", "opinion", "watch", "preview", "recap", "morning brief", "analysis", "blog", "commentary", "podcast", "video", "roundup", "exclusive"]
 
@@ -131,9 +131,9 @@ def get_sentiment_score(text):
     if score < 0: return "🟠 Mild Bear", score
     return "⚪ Neutral", 0
 
-# ────────────────────────────────────────────────
-#  CACHED DATA FUNCTIONS
-# ────────────────────────────────────────────────
+# ================================================
+# CACHED DATA FUNCTIONS
+# ================================================
 @st.cache_data(ttl=300)
 def get_etf_crypto_sentiment():
     proxies = {"S&P 500 (SPY)": "SPY", "Nasdaq (QQQ)": "QQQ", "Bitcoin": "BINANCE:BTCUSDT"}
@@ -197,7 +197,7 @@ def fetch_market_snapshot():
                 gap_pct = 0.0
             try:
                 today_vol = intra['Volume'][sym].sum()
-                avg_vol = hist_data['Volume'][sym].iloc[-8:-1].mean()
+                avg_vol = hist_data['Volume'][sym].iloc[-8:-1].mean() if len(hist_data['Volume'][sym]) >= 8 else 1.0
                 rvol = today_vol / avg_vol if avg_vol > 0 else 1.0
             except:
                 rvol = 1.0
@@ -208,6 +208,32 @@ def fetch_market_snapshot():
         except:
             continue
     return pd.DataFrame(rows), intra, hist_data
+
+@st.cache_data(ttl=180)
+def get_finnhub_econ_calendar():
+    today = datetime.datetime.now(pytz.timezone('US/Eastern')).date().strftime('%Y-%m-%d')
+    url = f"https://finnhub.io/api/v1/calendar/economic?from={today}&to={today}&token={FINNHUB_API_KEY}"
+    try:
+        r = requests.get(url, timeout=10)
+        r.raise_for_status()
+        events = r.json().get('economicCalendar', [])
+        items = []
+        high_keywords = ['cpi', 'ppi', 'gdp', 'nfp', 'payroll', 'unemployment', 'fomc', 'fed', 'rate decision', 'inflation']
+        for e in events:
+            event_name = e.get('event', '').lower()
+            impact = "🔴 HIGH" if any(k in event_name for k in high_keywords) else "🟡 Medium" if e.get('estimate') else "⚪ Low"
+            items.append({
+                "Time (ET)": e.get('time', '—'), "Event": e.get('event', '—'),
+                "Actual": e.get('actual', '—'), "Estimate": e.get('estimate', '—'),
+                "Previous": e.get('previous', '—'), "Country": e.get('country', '—'),
+                "Impact": impact
+            })
+        df = pd.DataFrame(items)
+        if df.empty:
+            return pd.DataFrame(columns=["Time (ET)", "Event", "Actual", "Estimate", "Previous", "Country", "Impact"])
+        return df.sort_values('Time (ET)')
+    except:
+        return pd.DataFrame(columns=["Time (ET)", "Event", "Actual", "Estimate", "Previous", "Country", "Impact"])
 
 def get_earnings_calendar_finnhub(date_str):
     url = f"https://finnhub.io/api/v1/calendar/earnings?from={date_str}&to={date_str}&token={FINNHUB_API_KEY}"
@@ -403,15 +429,20 @@ def get_alphavantage_analyst_ratings():
 
             score = (strong_buy*5 + buy*4 + hold*3 + sell*2 + strong_sell*1) / total
             if score >= 4.5:
-                consensus = "🚀 Strong Buy"; bull_score = 5
+                consensus = "🚀 Strong Buy"
+                bull_score = 5
             elif score >= 3.5:
-                consensus = "🟢 Buy"; bull_score = 4
+                consensus = "🟢 Buy"
+                bull_score = 4
             elif score >= 2.5:
-                consensus = "⚖️ Hold"; bull_score = 3
+                consensus = "⚖️ Hold"
+                bull_score = 3
             elif score >= 1.5:
-                consensus = "🔴 Sell"; bull_score = 2
+                consensus = "🔴 Sell"
+                bull_score = 2
             else:
-                consensus = "💥 Strong Sell"; bull_score = 1
+                consensus = "💥 Strong Sell"
+                bull_score = 1
 
             target_mean = float(data.get("AnalystTargetPrice", 0)) if data.get("AnalystTargetPrice") else None
             current_price = market_df[market_df["Symbol"] == sym]["Price"].iloc[0] if not market_df[market_df["Symbol"] == sym].empty else None
@@ -461,35 +492,9 @@ def get_finnhub_general_news():
     except:
         return pd.DataFrame()
 
-@st.cache_data(ttl=180)
-def get_finnhub_econ_calendar():
-    today = datetime.datetime.now(pytz.timezone('US/Eastern')).date().strftime('%Y-%m-%d')
-    url = f"https://finnhub.io/api/v1/calendar/economic?from={today}&to={today}&token={FINNHUB_API_KEY}"
-    try:
-        r = requests.get(url, timeout=10)
-        r.raise_for_status()
-        events = r.json().get('economicCalendar', [])
-        items = []
-        high_keywords = ['cpi', 'ppi', 'gdp', 'nfp', 'payroll', 'unemployment', 'fomc', 'fed', 'rate decision', 'inflation']
-        for e in events:
-            event_name = e.get('event', '').lower()
-            impact = "🔴 HIGH" if any(k in event_name for k in high_keywords) else "🟡 Medium" if e.get('estimate') else "⚪ Low"
-            items.append({
-                "Time (ET)": e.get('time', '—'), "Event": e.get('event', '—'),
-                "Actual": e.get('actual', '—'), "Estimate": e.get('estimate', '—'),
-                "Previous": e.get('previous', '—'), "Country": e.get('country', '—'),
-                "Impact": impact
-            })
-        df = pd.DataFrame(items)
-        if not df.empty:
-            df = df.sort_values('Time (ET)')
-        return df
-    except:
-        return pd.DataFrame()
-
-# ────────────────────────────────────────────────
-#  MAIN APP
-# ────────────────────────────────────────────────
+# ================================================
+# MAIN APP
+# ================================================
 market_df, intra_data, hist_data = fetch_market_snapshot()
 est = pytz.timezone('US/Eastern')
 time_now = datetime.datetime.now(est).strftime('%H:%M:%S')
@@ -498,12 +503,13 @@ st.title("🏛️ Alpha Terminal Pro")
 st.caption(f"EST {time_now} | Data as of {datetime.date.today()} | Day-Trader Edition with Macro Pulse")
 
 # ────────────────────────────────────────────────
-#  SIDEBAR
+#  SIDEBAR VOLUME SURGE ALERT
 # ────────────────────────────────────────────────
 st.sidebar.title("🚨 LIVE VOLUME SURGE ALERTS")
 threshold = st.sidebar.slider("RVOL Surge Threshold (x)", 1.5, 10.0, 3.0, 0.5)
 
 alert_df = market_df[(market_df['Symbol'].isin(USER_HOT_LIST)) & (market_df['RVOL'] >= threshold)].copy()
+
 if not alert_df.empty:
     alert_df = alert_df.sort_values('RVOL', ascending=False)
     st.sidebar.success(f"🔥 {len(alert_df)} STOCKS SURGING!")
@@ -555,11 +561,14 @@ with tab_premarket:
     st.markdown("---")
     st.subheader("📅 High-Impact Data (Today)")
     econ_df = get_finnhub_econ_calendar()
-    high_impact = econ_df[econ_df['Impact'].str.contains("HIGH", na=False)]
-    if not high_impact.empty:
-        st.dataframe(high_impact, hide_index=True, use_container_width=True)
+    if econ_df.empty or econ_df.shape[0] == 0:
+        st.info("No major 🔴 HIGH impact releases scheduled today.")
     else:
-        st.write("No major 🔴 HIGH impact releases scheduled today.")
+        high_impact = econ_df[econ_df['Impact'].str.contains("HIGH", na=False)]
+        if not high_impact.empty:
+            st.dataframe(high_impact.style.background_gradient(cmap='Reds', subset=['Impact']), hide_index=True, use_container_width=True)
+        else:
+            st.info("No major 🔴 HIGH impact releases scheduled today.")
 
 with tab_overview:
     st.subheader("🗝️ Key Indices & Futures")
@@ -613,7 +622,8 @@ with tab_rel_strength:
         sector_symbols = list(SECTOR_TICKERS.values())
         plot_df = hist_data['Close'][[benchmark] + sector_symbols].dropna(how='all')
         normalized_df = (plot_df / plot_df.iloc[0] - 1) * 100
-        melt_df = normalized_df.reset_index().rename(columns={normalized_df.index.name or 'Date': 'Date'})
+        melt_df = normalized_df.reset_index()
+        melt_df = melt_df.rename(columns={melt_df.columns[0]: 'Date'})
         fig = px.line(melt_df.melt(id_vars='Date', var_name='Ticker', value_name='Perf %'),
                       x='Date', y='Perf %', color='Ticker', template="plotly_dark", height=500)
         fig.update_traces(patch={"line": {"width": 4, "dash": "dot"}}, selector={"legendgroup": "SPY"})
@@ -622,8 +632,9 @@ with tab_rel_strength:
         current_perf = normalized_df.iloc[-1]
         rel_perf = (current_perf - current_perf[benchmark]).round(2).reset_index()
         rel_perf.columns = ['Ticker', 'vs SPY (%)']
-        st.dataframe(rel_perf.sort_values('vs SPY (%)', ascending=False).style.background_gradient(cmap='RdYlGn'), hide_index=True, use_container_width=True)
-    except Exception as e:
+        st.dataframe(rel_perf.sort_values('vs SPY (%)', ascending=False).style.background_gradient(cmap='RdYlGn'),
+                     hide_index=True, use_container_width=True)
+    except Exception as e: 
         st.error(f"RS Error: {e}")
 
     st.subheader("⚖️ Mag7 Strength vs QQQ")
@@ -633,7 +644,8 @@ with tab_rel_strength:
         mag7_symbols = list(MAG7_TICKERS.values())
         plot_df = hist_data['Close'][[benchmark] + mag7_symbols].dropna(how='all')
         normalized_df = (plot_df / plot_df.iloc[0] - 1) * 100
-        melt_df = normalized_df.reset_index().rename(columns={normalized_df.index.name or 'Date': 'Date'})
+        melt_df = normalized_df.reset_index()
+        melt_df = melt_df.rename(columns={melt_df.columns[0]: 'Date'})
         fig = px.line(melt_df.melt(id_vars='Date', var_name='Ticker', value_name='Perf %'),
                       x='Date', y='Perf %', color='Ticker', template="plotly_dark", height=500)
         fig.update_traces(patch={"line": {"width": 4, "dash": "dot"}}, selector={"legendgroup": "QQQ"})
@@ -642,13 +654,14 @@ with tab_rel_strength:
         current_perf = normalized_df.iloc[-1]
         rel_perf = (current_perf - current_perf[benchmark]).round(2).reset_index()
         rel_perf.columns = ['Ticker', 'vs QQQ (%)']
-        st.dataframe(rel_perf.sort_values('vs QQQ (%)', ascending=False).style.background_gradient(cmap='RdYlGn'), hide_index=True, use_container_width=True)
-    except Exception as e:
+        st.dataframe(rel_perf.sort_values('vs QQQ (%)', ascending=False).style.background_gradient(cmap='RdYlGn'),
+                     hide_index=True, use_container_width=True)
+    except Exception as e: 
         st.error(f"Mag7 RS Error: {e}")
 
 with tab_gex:
     st.subheader("📊 Gamma Exposure (GEX) + Gamma Flip Level")
-    st.caption("Front 3 expirations • Green = Long Gamma • Red = Short Gamma • Yellow line = **Gamma Flip**")
+    st.caption("Front 3 expirations • Green = Long Gamma (stabilizing) • Red = Short Gamma (amplifying) • Yellow line = **Gamma Flip**")
     user_ticker = st.text_input("Enter Ticker for GEX Analysis", value="SPY").upper().strip()
     if user_ticker:
         try:
@@ -694,6 +707,7 @@ with tab_gex:
                               delta="🟢 Long Gamma (pinning likely)" if total_gex > 0 else "🔴 Short Gamma (volatile)")
                 with col3:
                     st.metric("Current Spot", f"${spot:,.2f}")
+                st.caption("**Gamma Flip** = first strike where net GEX changes sign.")
                 fig = go.Figure()
                 fig.add_trace(go.Bar(x=df_agg.index, y=df_agg.values,
                                      marker_color=['#00ff88' if x > 0 else '#ff4444' for x in df_agg.values], name="GEX ($M)"))
@@ -726,6 +740,7 @@ with tab_earnings:
 
 with tab_analyst:
     st.subheader("📊 Analyst Ratings & Price Targets (Alpha Vantage)")
+    st.caption("Live consensus + mean price target • Cached 1 hour")
     analyst_df = get_alphavantage_analyst_ratings()
     if not analyst_df.empty:
         analyst_df = analyst_df.sort_values('Bull Score', ascending=False)
@@ -744,14 +759,20 @@ with tab_analyst:
             .style
             .applymap(rating_color, subset=['Consensus'])
             .background_gradient(cmap='RdYlGn', subset=['Upside %', 'Bull Score'])
-            .format({"Target Mean": "${:,.2f}", "Current Price": "${:,.2f}", "Upside %": "{:+.1f}%"}),
-            hide_index=True, use_container_width=True
+            .format({
+                "Target Mean": "${:,.2f}",
+                "Current Price": "${:,.2f}",
+                "Upside %": "{:+.1f}%"
+            }),
+            hide_index=True,
+            use_container_width=True
         )
     else:
-        st.info("No analyst data (check Alpha Vantage key).")
+        st.info("Fetching analyst ratings... (Alpha Vantage free tier limit)")
 
 with tab_macro:
     st.subheader("🌍 Macro & Market-Moving News")
+    st.caption("High-impact news affecting the broader market")
     macro_news = get_macro_news()
     if macro_news:
         total_score = 0
@@ -774,9 +795,12 @@ with tab_macro:
                         st.write(f"**Source:** {item.get('Source')} | {item.get('Date')}")
                         st.write(f"[🔗 Read]({item.get('URL')})")
         st.sidebar.metric("Macro Sentiment Pulse", total_score, delta="Bullish" if total_score >= 0 else "Bearish")
+    else:
+        st.info("Fetching macro news...")
 
 with tab_finnhub:
     st.subheader("🌐 Finnhub Daily Pulse")
+    st.caption("Live general market news + Today's Economic Calendar")
     col1, col2 = st.columns([1, 1])
     with col1:
         st.markdown("### 📈 Finnhub Market News (High Impact)")
@@ -786,22 +810,28 @@ with tab_finnhub:
                 emoji = "🔥" if row['Score'] >= 2 else "📈"
                 with st.expander(f"{emoji} {row['Sentiment']} | {row['Time']} | {row['Title'][:85]}..."):
                     st.write(f"**Source:** {row['Source']}")
-                    if row['URL']: st.write(f"[🔗 Read]({row['URL']})")
+                    if row['URL']:
+                        st.write(f"[🔗 Read full story]({row['URL']})")
+        else:
+            st.info("Fetching high-impact news...")
     with col2:
         st.markdown("### 📅 Economic Calendar (Today)")
         econ_df = get_finnhub_econ_calendar()
         if not econ_df.empty:
             st.dataframe(econ_df.style.background_gradient(cmap='RdYlGn_r', subset=['Impact']), hide_index=True, use_container_width=True)
+        else:
+            st.info("No events today or fetching data...")
 
 with tab_news:
     st.subheader("🔥 Hot Mag7 + SPY/QQQ News")
+    st.caption("Market-moving news for the most important assets")
     hot_df = get_mag7_hot_news()
     if not hot_df.empty:
         for _, row in hot_df.iterrows():
             impact_emoji = "🔥" if row['Impact'] >= 5 else "⚡" if row['Impact'] >= 3 else "📈"
             with st.expander(f"{impact_emoji} {row['Sentiment']} | {row['Asset']} | {row['Title'][:92]}... • {row['Time']}"):
-                st.write(f"**Source:** {row['Source']} | Impact: {row['Impact']}")
-                st.write(f"[🔗 Read]({row['URL']})")
+                st.write(f"**Source:** {row['Source']} | Impact Score: {row['Impact']}")
+                st.write(f"[🔗 Read full story]({row['URL']})")
     st.markdown("---")
     st.subheader("📰 High-Impact Theme Stocks News")
     news_df = get_theme_stock_news()
@@ -811,12 +841,16 @@ with tab_news:
         for _, row in news_df.iterrows():
             impact_emoji = "🔥" if row['Impact'] >= 5 else "⚡" if row['Impact'] >= 3 else "📈"
             with st.expander(f"{impact_emoji} {row['Sentiment']} | {row['Asset']} | {row['Title'][:92]}... • {row['Time']}"):
-                st.write(f"**Source:** {row['Source']} | Impact: {row['Impact']}")
-                st.write(f"[🔗 Read]({row['URL']})")
+                st.write(f"**Source:** {row['Source']} | Impact Score: {row['Impact']}")
+                st.write(f"[🔗 Read full story]({row['URL']})")
+    else:
+        st.info("Fetching high-impact theme news...")
 
 with tab_bias:
     st.subheader("🔍 Market Bias & Gap Analysis")
-    key_assets = ["VIX", "ES (S&P 500 Fut)", "NQ (Nasdaq Fut)", "YM (Dow Fut)", "RTY (Russell 2000)", "SPY", "QQQ", "S&P 500"]
+    st.caption("Bullish / Bearish / Chop regime based on today's price vs yesterday close")
+    key_assets = ["VIX", "ES (S&P 500 Fut)", "NQ (Nasdaq Fut)", "YM (Dow Fut)", 
+                  "RTY (Russell 2000)", "SPY", "QQQ", "S&P 500"]
     bias_df = market_df[market_df['Asset'].isin(key_assets + list(MAG7_TICKERS.keys()))].copy()
     def get_bias(chg):
         if chg >= 1.8:   return "🚀 Strong Bullish"
@@ -826,9 +860,12 @@ with tab_bias:
         else:            return "💥 Strong Bearish"
     bias_df['Bias'] = bias_df['Change %'].apply(get_bias)
     def style_bias(val):
-        if "Strong Bullish" in val or "Bullish" in val: return 'background-color: #00cc66; color: black; font-weight: bold'
-        if "Strong Bearish" in val or "Bearish" in val: return 'background-color: #ff4444; color: white; font-weight: bold'
-        if "Chop" in val: return 'background-color: #555555; color: white'
+        if "Strong Bullish" in val or "Bullish" in val:
+            return 'background-color: #00cc66; color: black; font-weight: bold'
+        if "Strong Bearish" in val or "Bearish" in val:
+            return 'background-color: #ff4444; color: white; font-weight: bold'
+        if "Chop" in val:
+            return 'background-color: #555555; color: white'
         return ''
     st.dataframe(
         bias_df[['Asset', 'Price', 'Gap %', 'Change %', 'Bias', 'RVOL']].round(2)
