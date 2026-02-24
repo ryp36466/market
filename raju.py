@@ -616,11 +616,11 @@ with tab_themes:
 
 with tab_rel_strength:
     st.subheader("⚖️ Sector Strength vs SPY")
-    st.caption("**1-Day** Cumulative Performance normalized to 0%")   # ← changed
+    st.caption("5-Day Cumulative Performance normalized to 0%")
     try:
         benchmark = "SPY"
         sector_symbols = list(SECTOR_TICKERS.values())
-        plot_df = hist_data['Close'][[benchmark] + sector_symbols].dropna(how='all').tail(2)  # ← now 1-day
+        plot_df = hist_data['Close'][[benchmark] + sector_symbols].dropna(how='all')
         normalized_df = (plot_df / plot_df.iloc[0] - 1) * 100
         melt_df = normalized_df.reset_index()
         melt_df = melt_df.rename(columns={melt_df.columns[0]: 'Date'})
@@ -638,11 +638,11 @@ with tab_rel_strength:
         st.error(f"RS Error: {e}")
 
     st.subheader("⚖️ Mag7 Strength vs QQQ")
-    st.caption("**1-Day** Cumulative Performance normalized to 0%")   # ← changed
+    st.caption("5-Day Cumulative Performance normalized to 0%")
     try:
         benchmark = "QQQ"
         mag7_symbols = list(MAG7_TICKERS.values())
-        plot_df = hist_data['Close'][[benchmark] + mag7_symbols].dropna(how='all').tail(2)  # ← now 1-day
+        plot_df = hist_data['Close'][[benchmark] + mag7_symbols].dropna(how='all')
         normalized_df = (plot_df / plot_df.iloc[0] - 1) * 100
         melt_df = normalized_df.reset_index()
         melt_df = melt_df.rename(columns={melt_df.columns[0]: 'Date'})
