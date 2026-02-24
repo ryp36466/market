@@ -452,10 +452,60 @@ with tab_themes:
 # (All remaining tabs — Relative Strength, GEX, Options, Earnings, Analyst, Macro, News, Bias — are identical to the previous full version I sent)
 
 with tab_rel_strength:
-    # ... (same code as before)
-    pass   # ← replace with the full block from previous message if needed
+    st.subheader("⚖️ Sector Strength vs SPY")
+    st.caption("5-Day Cumulative Performance normalized to 0%")
+    try:
+        benchmark = "SPY"
+        sector_symbols = list(SECTOR_TICKERS.values())
+        plot_df = hist_data['Close'][[benchmark] + sector_symbols].dropna(how='all')
+        normalized_df = (plot_df / plot_df.iloc[0] - 1) * 100
+        
+        melt_df = normalized_df.reset_index()
+        date_col = melt_df.columns[0]
+        melt_df = melt_df.rename(columns={date_col: 'Date'})
+        
+        fig = px.line(melt_df.melt(id_vars='Date', var_name='Ticker', value_name='Perf %'),
+                      x='Date', y='Perf %', color='Ticker', template="plotly_dark", height=500)
+        fig.update_traces(patch={"line": {"width": 4, "dash": "dot"}}, selector={"legendgroup": "SPY"})
+        st.plotly_chart(fig, use_container_width=True)
+        
+        st.write("### Alpha Delta (Current vs SPY)")
+        current_perf = normalized_df.iloc[-1]
+        rel_perf = (current_perf - current_perf[benchmark]).round(2).reset_index()
+        rel_perf.columns = ['Ticker', 'vs SPY (%)']
+        st.dataframe(rel_perf.sort_values('vs SPY (%)', ascending=False).style.background_gradient(cmap='RdYlGn'),
+                     hide_index=True, use_container_width=True)
+    except Exception as e: 
+        st.error(f"RS Error: {e}")
+        st.info("Data may still be loading — refresh in 5 seconds.")
 
-# ... [copy the rest of the tabs exactly as in the previous full code I gave you]
+    st.subheader("⚖️ Mag7 Strength vs QQQ")
+    st.caption("5-Day Cumulative Performance normalized to 0%")
+    try:
+        benchmark = "QQQ"
+        mag7_symbols = list(MAG7_TICKERS.values())
+        plot_df = hist_data['Close'][[benchmark] + mag7_symbols].dropna(how='all')
+        normalized_df = (plot_df / plot_df.iloc[0] - 1) * 100
+        
+        melt_df = normalized_df.reset_index()
+        date_col = melt_df.columns[0]
+        melt_df = melt_df.rename(columns={date_col: 'Date'})
+        
+        fig = px.line(melt_df.melt(id_vars='Date', var_name='Ticker', value_name='Perf %'),
+                      x='Date', y='Perf %', color='Ticker', template="plotly_dark", height=500)
+        fig.update_traces(patch={"line": {"width": 4, "dash": "dot"}}, selector={"legendgroup": "QQQ"})
+        st.plotly_chart(fig, use_container_width=True)
+        
+        st.write("### Alpha Delta (Current vs QQQ)")
+        current_perf = normalized_df.iloc[-1]
+        rel_perf = (current_perf - current_perf[benchmark]).round(2).reset_index()
+        rel_perf.columns = ['Ticker', 'vs QQQ (%)']
+        st.dataframe(rel_perf.sort_values('vs QQQ (%)', ascending=False).style.background_gradient(cmap='RdYlGn'),
+                     hide_index=True, use_container_width=True)
+    except Exception as e: 
+        st.error(f"Mag7 RS Error: {e}")
+        st.info("Data may still be loading — refresh in 5 seconds.")
+
 
 with tab_bias:
     st.subheader("🔍 Market Bias & Gap Analysis")
