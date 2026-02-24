@@ -81,7 +81,6 @@ for sublist in TRADING_THEMES.values():
 ALL_SYMBOLS = list(symbol_to_label.keys())
 ANALYST_SYMBOLS = sorted({sym for sublist in TRADING_THEMES.values() for sym in sublist})
 
-# NEW: Dedicated hot list for Mag7 + SPY + QQQ
 MAG7_HOT_SYMBOLS = list(MAG7_TICKERS.values()) + ["SPY", "QQQ"]
 
 HUGE_CAP_SYMBOLS = {
@@ -94,7 +93,7 @@ HUGE_CAP_SYMBOLS = {
 FINNHUB_API_KEY = "d6au4n9r01qnr27itio0d6au4n9r01qnr27itiog"
 
 # ────────────────────────────────────────────────
-#  HIGH-IMPACT NEWS FILTER (Professional Grade)
+#  HIGH-IMPACT NEWS FILTER
 # ────────────────────────────────────────────────
 HIGH_IMPACT_KEYWORDS = [
     "earnings", "eps", "revenue", "guidance", "outlook", "beat", "miss", "raised", "cut", "lowered", "hike",
@@ -135,7 +134,6 @@ def impact_score(title):
 
 @st.cache_data(ttl=20)
 def fetch_market_snapshot():
-    """Fixed version that reliably shows live pre-market prices, change%, gap% from 4:00 AM ET"""
     hist_data = yf.download(ALL_SYMBOLS, period="10d", interval="1d", progress=False)
     intra = yf.download(ALL_SYMBOLS, period="2d", interval="5m", prepost=True, progress=False)
     
@@ -146,7 +144,6 @@ def fetch_market_snapshot():
             tk = yf.Ticker(sym)
             fast = tk.fast_info
             
-            # Reliable pre-market / regular price
             price = fast.get('lastPrice') or fast.get('regularMarketPrice') or fast.get('previousClose')
             prev_close = fast.get('regularMarketPreviousClose') or fast.get('previousClose')
             
@@ -157,7 +154,6 @@ def fetch_market_snapshot():
             prev_close = float(prev_close)
             change = ((price - prev_close) / prev_close * 100)
             
-            # Gap % using actual first trade of the session (pre-market open)
             try:
                 open_series = intra['Open'][sym].dropna()
                 today_open = open_series.iloc[0] if not open_series.empty else price
@@ -165,7 +161,6 @@ def fetch_market_snapshot():
             except:
                 gap_pct = 0.0
             
-            # RVOL
             try:
                 today_vol = intra['Volume'][sym].sum()
                 avg_vol = hist_data['Volume'][sym].iloc[-8:-1].mean()
@@ -283,7 +278,7 @@ def calc_gamma_vectorized(S, K, T, v, r, q, types, OI):
 
 
 # ────────────────────────────────────────────────
-#  HIGH-IMPACT THEME STOCK NEWS
+#  NEWS FUNCTIONS
 # ────────────────────────────────────────────────
 @st.cache_data(ttl=180)
 def get_theme_stock_news(max_stocks=30):
@@ -337,9 +332,6 @@ def get_theme_stock_news(max_stocks=30):
     return df
 
 
-# ────────────────────────────────────────────────
-#  HIGH-IMPACT MAG7 + SPY + QQQ HOT NEWS
-# ────────────────────────────────────────────────
 @st.cache_data(ttl=180)
 def get_mag7_hot_news():
     news_items = []
@@ -415,9 +407,6 @@ def get_macro_news():
             return []
 
 
-# ────────────────────────────────────────────────
-#  RELIABLE YAHOO ANALYST RATINGS
-# ────────────────────────────────────────────────
 @st.cache_data(ttl=1800)
 def get_analyst_ratings():
     ratings = []
@@ -473,18 +462,21 @@ time_now = datetime.datetime.now(est).strftime('%H:%M:%S')
 st.title("🏛️ Alpha Terminal Pro")
 st.caption(f"EST {time_now} | Data as of {datetime.date.today()} | Day-Trader Edition with Macro Pulse")
 
-# ── Manual Refresh Button (works instantly at 4AM pre-market)
+# Manual Refresh Button
 col_refresh = st.columns([7, 1])
 with col_refresh[1]:
     if st.button("🔄 Refresh Now", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 
-tab_overview, tab_sectors, tab_themes, tab_rel_strength, tab_gex, tab_options, tab_earnings, tab_analyst, tab_macro, tab_extremes, tab_news, tab_bias = st.tabs([
+# ── TABS (ATH/ATL Plays removed) ──
+tab_overview, tab_sectors, tab_themes, tab_rel_strength, tab_gex, tab_options, tab_earnings, tab_analyst, tab_macro, tab_news, tab_bias = st.tabs([
     "📈 Market Overview", "🔥 Alpha Sectors", "🎯 Trading Themes", "⚖️ Relative Strength",
     "📊 GEX + Gamma Flip", "🐳 Options", "🎯 Earnings", "📊 Analyst Ratings (Yahoo)",
-    "🌍 Macro News", "🔥 ATH/ATL Plays", "📰 High-Impact News", "🔍 Bias & Regime"
+    "🌍 Macro News", "📰 High-Impact News", "🔍 Bias & Regime"
 ])
+
+# All other tabs remain exactly the same (only ATH/ATL block deleted)
 
 with tab_overview:
     st.subheader("🗝️ Key Indices & Futures")
@@ -785,9 +777,6 @@ with tab_macro:
     else:
         st.info("Fetching macro news from Finviz...")
 
-with tab_extremes:
-    st.info("ATH/ATL scanner – coming soon")
-
 # ────────────────────────────────────────────────
 #  HIGH-IMPACT NEWS TAB
 # ────────────────────────────────────────────────
@@ -864,4 +853,4 @@ with tab_bias:
     
     st.info("**Regime Logic**: >1.8% = Strong Bull | 0.6–1.8% = Bull | ±0.6% = Chop | -1.8 to -0.6 = Bear | <-1.8% = Strong Bear")
 
-st_autorefresh(interval=45000, key="global_refresh")   # 45-second live refresh
+st_autorefresh(interval=45000, key="global_refresh")
