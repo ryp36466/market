@@ -135,6 +135,138 @@ def get_sentiment_score(text):
     if score < 0: return "🟠 Mild Bear", score
     return "⚪ Neutral", 0
 
+@st.cache_data(ttl=300)
+def get_etf_crypto_sentiment():
+    """Fetches Finnhub sentiment for market proxies and Bitcoin."""
+    proxies = {"S&P 500 (SPY)": "SPY", "Nasdaq (QQQ)": "QQQ", "Bitcoin": "BINANCE:BTCUSDT"}
+    results = []
+    for name, sym in proxies.items():
+        try:
+            url = f"https://finnhub.io/api/v1/news-sentiment?symbol={sym}&token={FINNHUB_API_KEY}"
+            data = requests.get(url).json()
+            bull_pct = data['sentiment']['bullishPercent'] * 100
+            buzz = data['buzz']['buzz']
+            results.append({
+                "Asset": name,
+                "Mood": "🐂 Bullish" if bull_pct > 60 else "🐻 Bearish" if bull_pct < 40 else "⚖️ Neutral",
+                "Bullish %": f"{bull_pct:.1f}%",
+                "Buzz": round(buzz, 2)
+            })
+        except: continue
+    return pd.DataFrame(results)
+
+@st.cache_data(ttl=300)
+def get_macro_drivers():
+    """Filters general news for high-impact macro keywords."""
+    url = f"https://finnhub.io/api/v1/news?category=general&token={FINNHUB_API_KEY}"
+    macro_keywords = ['fed', 'inflation', 'cpi', 'ppi', 'tariff', 'treasury', 'yield', 'geopolitical', 'rate hike']
+    drivers = []
+    try:
+        news_list = requests.get(url).json()
+        for item in news_list[:40]:
+            title = item.get('headline', '')
+            if any(k in title.lower() for k in macro_keywords):
+                label, score = get_sentiment_score(title)
+                drivers.append({
+                    "Headline": title,
+                    "Sentiment": label,
+                    "Impact": "🔴 High" if score < -1 or score > 1 else "🟡 Mid",
+                    "URL": item.get('url')
+                })
+    except: pass
+    return pd.DataFrame(drivers)
+
+# ────────────────────────────────────────────────
+#  CORE DATA & UI HELPERS (TRUNCATED FOR BREVITY - KEEP YOUR EXISTING ONES)
+# ────────────────────────────────────────────────
+def get_sentiment_score(text):
+    bull = ['upbeat','growth','surge','rally','beat','buy','bullish','positive','upgrade','raise']
+    bear = ['slump','drop','fall','miss','sell','bearish','inflation','fear','risk','downgrade','cut']
+    score = sum(1 for w in bull if w in text.lower()) - sum(1 for w in bear if w in text.lower())
+    if score > 0: return "🟢 Bullish", score
+    if score < 0: return "🔴 Bearish", score
+    return "⚪ Neutral", 0
+
+@st.cache_data(ttl=20)
+def fetch_market_snapshot():
+    all_syms = list(set(list(GLOBAL_TICKERS.values()) + list(SECTOR_TICKERS.values()) + [s for t in TRADING_THEMES.values() for s in t]))
+    hist_data = yf.download(all_syms, period="5d", interval="1d", progress=False)
+    intra = yf.download(all_syms, period="2d", interval="5m", prepost=True, progress=False)
+    rows = []
+    for sym in all_syms:
+        try:
+            price = hist_data['Close'][sym].iloc[-1]
+            prev = hist_data['Close'][sym].iloc[-2]
+            change = ((price - prev) / prev) * 100
+            rows.append({"Symbol": sym, "Price": price, "Change %": change})
+        except: continue
+    return pd.DataFrame(rows), intra, hist_data
+
+# ────────────────────────────────────────────────
+#  MAIN APPLICATION LOGIC
+# ────────────────────────────────────────────────
+market_df, intra_data, hist_data = fetch_market_snapshot()
+est = pytz.timezone('US/Eastern')
+time_now = datetime.datetime.now(est).strftime('%H:%M:%S')
+
+st.title("🏛️ Alpha Terminal Pro")
+st.caption(f"EST {time_now} | Premarket & Macro Pulse Integration")
+
+# TABS - Added '🌅 Premarket Pulse' as the first tab
+tab_premarket, tab_overview, tab_themes, tab_macro, tab_finnhub = st.tabs([
+    "🌅 Premarket Pulse", "📈 Market Overview", "🎯 Trading Themes", "🌍 Macro News", "🌐 Finnhub Daily Pulse"
+])
+
+with tab_premarket:
+    st.subheader("🌡️ Market Sentiment Gauges")
+    col1, col2 = st.columns([1, 2])
+    
+    with col1:
+        st.markdown("#### ETF & Crypto Mood")
+        sent_df = get_etf_crypto_sentiment()
+        if not sent_df.empty:
+            st.dataframe(sent_df, hide_index=True, use_container_width=True)
+            
+    with col2:
+        st.markdown("#### 📡 Active Macro Drivers")
+        macro_df = get_macro_drivers()
+        if not macro_df.empty:
+            for _, row in macro_df.iterrows():
+                with st.expander(f"{row['Sentiment']} | {row['Headline'][:80]}..."):
+                    st.write(f"Impact: {row['Impact']}")
+                    st.write(f"[Read full story]({row['URL']})")
+        else:
+            st.info("No high-impact macro news detected in the last few hours.")
+
+    st.markdown("---")
+    st.subheader("📅 High-Impact Data (Today)")
+    # Reusing your existing calendar function
+    url_econ = f"https://finnhub.io/api/v1/calendar/economic?token={FINNHUB_API_KEY}"
+    try:
+        econ_data = requests.get(url_econ).json().get('economicCalendar', [])
+        high_impact = [e for e in econ_data if any(k in e['event'].lower() for k in ['cpi', 'fed', 'nfp', 'gdp'])]
+        if high_impact:
+            st.table(pd.DataFrame(high_impact)[['time', 'event', 'actual', 'estimate', 'impact']])
+        else:
+            st.write("No major 🔴 HIGH impact data releases scheduled for today.")
+    except: pass
+
+with tab_overview:
+    st.subheader("🗝️ Key Indices")
+    st.dataframe(market_df.style.background_gradient(cmap='RdYlGn', subset=['Change %']), use_container_width=True)
+
+with tab_themes:
+    cols = st.columns(2)
+    for i, (theme, tickers) in enumerate(TRADING_THEMES.items()):
+        with cols[i % 2]:
+            st.markdown(f"#### {theme}")
+            theme_df = market_df[market_df['Symbol'].isin(tickers)]
+            st.dataframe(theme_df, hide_index=True, use_container_width=True)
+
+# ────────────────────────────────────────────────
+#  AUTO-REFRESH
+# ────────────────────────────────────────────────
+st_autorefresh(interval=60000, key="global_refresh")
 # ────────────────────────────────────────────────
 #  DATA FUNCTIONS
 # ────────────────────────────────────────────────
