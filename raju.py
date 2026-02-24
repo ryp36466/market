@@ -370,9 +370,6 @@ def get_analyst_ratings():
             continue
     return pd.DataFrame(ratings)
 
-# ────────────────────────────────────────────────
-#  FINNHUB DAILY PULSE
-# ────────────────────────────────────────────────
 @st.cache_data(ttl=60)
 def get_finnhub_general_news():
     url = f"https://finnhub.io/api/v1/news?category=general&token={FINNHUB_API_KEY}"
@@ -383,18 +380,13 @@ def get_finnhub_general_news():
         items = []
         for item in news_list:
             title = item.get('headline', '')
-            if len(title) < 20 or not is_high_impact(title):
-                continue
+            if len(title) < 20 or not is_high_impact(title): continue
             dt = datetime.datetime.fromtimestamp(item.get('datetime', 0), tz=pytz.UTC)
             est_time = dt.astimezone(pytz.timezone('US/Eastern')).strftime('%H:%M')
             label, score = get_sentiment_score(title)
             items.append({
-                "Time": est_time,
-                "Title": title,
-                "Source": item.get('source', 'Finnhub'),
-                "URL": item.get('url', ''),
-                "Sentiment": label,
-                "Score": score
+                "Time": est_time, "Title": title, "Source": item.get('source', 'Finnhub'),
+                "URL": item.get('url', ''), "Sentiment": label, "Score": score
             })
         df = pd.DataFrame(items)
         if not df.empty:
@@ -417,12 +409,9 @@ def get_finnhub_econ_calendar():
             event_name = e.get('event', '').lower()
             impact = "🔴 HIGH" if any(k in event_name for k in high_keywords) else "🟡 Medium" if e.get('estimate') else "⚪ Low"
             items.append({
-                "Time (ET)": e.get('time', '—'),
-                "Event": e.get('event', '—'),
-                "Actual": e.get('actual', '—'),
-                "Estimate": e.get('estimate', '—'),
-                "Previous": e.get('previous', '—'),
-                "Country": e.get('country', '—'),
+                "Time (ET)": e.get('time', '—'), "Event": e.get('event', '—'),
+                "Actual": e.get('actual', '—'), "Estimate": e.get('estimate', '—'),
+                "Previous": e.get('previous', '—'), "Country": e.get('country', '—'),
                 "Impact": impact
             })
         df = pd.DataFrame(items)
@@ -442,19 +431,43 @@ time_now = datetime.datetime.now(est).strftime('%H:%M:%S')
 st.title("🏛️ Alpha Terminal Pro")
 st.caption(f"EST {time_now} | Data as of {datetime.date.today()} | Day-Trader Edition with Macro Pulse")
 
+# ────────────────────────────────────────────────
+#  SIDEBAR VOLUME SURGE ALERT
+# ────────────────────────────────────────────────
+st.sidebar.title("🚨 LIVE VOLUME SURGE ALERTS")
+threshold = st.sidebar.slider("RVOL Surge Threshold (x)", 1.5, 10.0, 3.0, 0.5)
+
+alert_df = market_df[(market_df['Symbol'].isin(USER_HOT_LIST)) & (market_df['RVOL'] >= threshold)].copy()
+
+if not alert_df.empty:
+    alert_df = alert_df.sort_values('RVOL', ascending=False)
+    st.sidebar.success(f"🔥 {len(alert_df)} STOCKS SURGING!")
+    st.sidebar.dataframe(
+        alert_df[['Asset', 'Symbol', 'Price', 'Change %', 'RVOL']]
+        .style.background_gradient(cmap='Reds', subset=['RVOL'])
+        .format({"Price": "${:,.2f}", "Change %": "{:+.2f}%", "RVOL": "{:.1f}x"}),
+        hide_index=True, use_container_width=True
+    )
+else:
+    st.sidebar.info("✅ No high-volume surges right now")
+
+st.sidebar.markdown("---")
+
+# Manual Refresh
 col_refresh = st.columns([7, 1])
 with col_refresh[1]:
     if st.button("🔄 Refresh Now", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 
-# TABS
+# TABS (no more tab_extremes)
 tab_overview, tab_sectors, tab_themes, tab_rel_strength, tab_gex, tab_options, tab_earnings, tab_analyst, tab_macro, tab_finnhub, tab_news, tab_bias = st.tabs([
     "📈 Market Overview", "🔥 Alpha Sectors", "🎯 Trading Themes", "⚖️ Relative Strength",
     "📊 GEX + Gamma Flip", "🐳 Options", "🎯 Earnings", "📊 Analyst Ratings (Yahoo)",
     "🌍 Macro News", "🌐 Finnhub Daily Pulse", "📰 High-Impact News", "🔍 Bias & Regime"
 ])
 
+# All tabs (full content)
 with tab_overview:
     st.subheader("🗝️ Key Indices & Futures")
     key_assets = ["VIX", "ES (S&P 500 Fut)", "NQ (Nasdaq Fut)", "YM (Dow Fut)", "RTY (Russell 2000)", "SPY", "QQQ", "S&P 500"]
@@ -635,16 +648,30 @@ with tab_analyst:
     if not analyst_df.empty:
         analyst_df = analyst_df.dropna(subset=['Bull Score']).sort_values('Bull Score', ascending=False)
         def rating_color(val):
-            if "Strong Buy" in val or "Buy" in val: return 'background-color: #00cc66; color: black; font-weight: bold;'
-            if "Hold" in val: return 'background-color: #ffcc66; color: black;'
-            if "Sell" in val: return 'background-color: #ff6666; color: white; font-weight: bold;'
+            if "Strong Buy" in val or "Buy" in val: 
+                return 'background-color: #00cc66; color: black; font-weight: bold;'
+            if "Hold" in val: 
+                return 'background-color: #ffcc66; color: black;'
+            if "Sell" in val: 
+                return 'background-color: #ff6666; color: white; font-weight: bold;'
             return ''
         st.dataframe(
-            analyst_df[["Asset", "Symbol", "Consensus", "Bull Score", "Target Mean", "Target High", "Target Low", "Current Price", "Upside %", "Analyst Count"]]
-            .style.applymap(rating_color, subset=['Consensus'])
+            analyst_df[[
+                "Asset", "Symbol", "Consensus", "Bull Score", "Target Mean", 
+                "Target High", "Target Low", "Current Price", "Upside %", "Analyst Count"
+            ]]
+            .style
+            .applymap(rating_color, subset=['Consensus'])
             .background_gradient(cmap='RdYlGn', subset=['Upside %', 'Bull Score'])
-            .format({"Target Mean": "${:,.2f}", "Target High": "${:,.2f}", "Target Low": "${:,.2f}", "Current Price": "${:,.2f}", "Upside %": "{:+.1f}%"}),
-            hide_index=True, use_container_width=True
+            .format({
+                "Target Mean": "${:,.2f}",
+                "Target High": "${:,.2f}",
+                "Target Low": "${:,.2f}",
+                "Current Price": "${:,.2f}",
+                "Upside %": "{:+.1f}%"
+            }),
+            hide_index=True,
+            use_container_width=True
         )
         st.caption("**Target Range** shown as High / Low. **Bull Score** 5 = Strong Buy → 1 = Strong Sell")
     else:
