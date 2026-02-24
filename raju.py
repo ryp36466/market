@@ -790,10 +790,12 @@ with tab_finnhub:
         else:
             st.info("No events today or fetching data...")
 
+# ────────────────────────────────────────────────
+#  HIGH-IMPACT NEWS TAB
+# ────────────────────────────────────────────────
 with tab_news:
-    # (same as before - Mag7 hot news + theme news)
     st.subheader("🔥 Hot Mag7 + SPY/QQQ News")
-     st.caption("**Market-moving** news for the most important assets (AAPL, MSFT, NVDA, AMZN, GOOGL, META, TSLA, SPY, QQQ) • High-impact filter • Updated live")
+    st.caption("**Market-moving** news for the most important assets (AAPL, MSFT, NVDA, AMZN, GOOGL, META, TSLA, SPY, QQQ) • High-impact filter • Updated live")
 
     hot_df = get_mag7_hot_news()
     
@@ -864,9 +866,4 @@ with tab_bias:
     
     st.info("**Regime Logic**: >1.8% = Strong Bull | 0.6–1.8% = Bull | ±0.6% = Chop | -1.8 to -0.6 = Bear | <-1.8% = Strong Bear")
 
-with tab_bias:
-    # (same as before)
-    st.subheader("🔍 Market Bias & Gap Analysis")
-    # ... (full block from previous code)
-
-st_autorefresh(interval=45000, key="global_refresh")
+st_autorefresh(interval=45000, key="global_refresh")   # 45-second live refresh
