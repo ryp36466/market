@@ -11,6 +11,7 @@ from finvizfinance.news import News
 import plotly.express as px
 import plotly.graph_objects as go
 from scipy.stats import norm
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ================================================
 # PAGE CONFIG
@@ -18,7 +19,7 @@ from scipy.stats import norm
 st.set_page_config(page_title="Alpha Terminal Pro", page_icon="🏛️", layout="wide")
 
 # ================================================
-# API KEYS
+# API KEYS (RECOMMENDATION: Move to st.secrets for production)
 # ================================================
 FINNHUB_API_KEY = "d6au4n9r01qnr27itio0d6au4n9r01qnr27itiog"
 ALPHA_VANTAGE_API_KEY = "Q6Z6I3QPW56O7NWP"
@@ -132,7 +133,63 @@ def get_sentiment_score(text):
     return "⚪ Neutral", 0
 
 # ================================================
-# CACHED DATA FUNCTIONS
+# PARALLEL FINVIZ NEWS SCRAPER (Major Speed Boost)
+# ================================================
+def scrape_single_finviz_news(sym: str, max_news: int = 8) -> list:
+    try:
+        f_sym = "BTC" if sym == "BTC-USD" else sym.split("=")[0]
+        url = f"https://finviz.com/quote.ashx?t={f_sym.upper()}"
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        r = requests.get(url, headers=headers, timeout=8)
+        soup = BeautifulSoup(r.text, "html.parser")
+        table = soup.find("table", class_="news-table")
+        if not table:
+            return []
+        items = []
+        for row in table.find_all("tr")[:max_news]:
+            tds = row.find_all("td")
+            if len(tds) < 2: continue
+            time_str = tds[0].text.strip()
+            a_tag = tds[1].find("a")
+            if not a_tag or len(a_tag.text.strip()) < 25: continue
+            title = a_tag.text.strip()
+            if not is_high_impact(title): continue
+            link = a_tag.get("href")
+            if not link.startswith("http"):
+                link = "https://finviz.com" + link
+            label, sent_score = get_sentiment_score(title)
+            imp_score = impact_score(title)
+            items.append({
+                "Asset": symbol_to_label.get(sym, sym),
+                "Symbol": sym,
+                "Title": title,
+                "URL": link,
+                "Source": "Finviz",
+                "Sentiment": label,
+                "Score": sent_score,
+                "Impact": imp_score,
+                "Time": time_str
+            })
+        return items
+    except:
+        return []
+
+@st.cache_data(ttl=180)
+def get_finviz_news_bulk(symbols: list, max_stocks: int = 30, max_news_per_stock: int = 8):
+    news_items = []
+    symbols_to_scrape = symbols[:max_stocks]
+    with ThreadPoolExecutor(max_workers=15) as executor:
+        future_to_sym = {executor.submit(scrape_single_finviz_news, sym, max_news_per_stock): sym 
+                         for sym in symbols_to_scrape}
+        for future in as_completed(future_to_sym):
+            news_items.extend(future.result())
+    df = pd.DataFrame(news_items)
+    if not df.empty:
+        df = df.sort_values(by=["Impact", "Score"], ascending=False).drop_duplicates(subset=["Title"])
+    return df
+
+# ================================================
+# CACHED DATA FUNCTIONS (Optimized)
 # ================================================
 @st.cache_data(ttl=300)
 def get_etf_crypto_sentiment():
@@ -173,10 +230,26 @@ def get_macro_drivers():
     except: pass
     return pd.DataFrame(drivers)
 
-@st.cache_data(ttl=20)
+@st.cache_data(ttl=15)  # Tight cache for live market data
 def fetch_market_snapshot():
-    hist_data = yf.download(ALL_SYMBOLS, period="10d", interval="1d", progress=False)
-    intra = yf.download(ALL_SYMBOLS, period="2d", interval="5m", prepost=True, progress=False)
+    est = pytz.timezone('US/Eastern')
+    now_est = datetime.datetime.now(est)
+    today_date = now_est.date()
+    
+    # 10d daily for avg volume
+    hist_data = yf.download(ALL_SYMBOLS, period="10d", interval="1d", progress=False, auto_adjust=True)
+    
+    # 2d 5m pre/post for TODAY ONLY volume + gap
+    intra = yf.download(ALL_SYMBOLS, period="2d", interval="5m", prepost=True, progress=False, auto_adjust=True)
+    
+    # Ensure timezone
+    if intra.index.tz is None:
+        intra = intra.tz_localize('UTC').tz_convert('US/Eastern')
+    else:
+        intra = intra.tz_convert('US/Eastern')
+    
+    intra_today = intra[intra.index.date == today_date]
+    
     rows = []
     for sym in ALL_SYMBOLS:
         label = symbol_to_label.get(sym, sym)
@@ -185,22 +258,28 @@ def fetch_market_snapshot():
             fast = tk.fast_info
             price = fast.get('lastPrice') or fast.get('regularMarketPrice') or fast.get('previousClose')
             prev_close = fast.get('regularMarketPreviousClose') or fast.get('previousClose')
-            if price is None or prev_close is None or prev_close <= 0: continue
+            if price is None or prev_close is None or prev_close <= 0:
+                continue
             price = float(price)
             prev_close = float(prev_close)
             change = ((price - prev_close) / prev_close * 100)
-            try:
-                open_series = intra['Open'][sym].dropna()
-                today_open = open_series.iloc[0] if not open_series.empty else price
-                gap_pct = ((today_open - prev_close) / prev_close * 100)
-            except:
-                gap_pct = 0.0
-            try:
-                today_vol = intra['Volume'][sym].sum()
-                avg_vol = hist_data['Volume'][sym].iloc[-8:-1].mean() if len(hist_data['Volume'][sym]) >= 8 else 1.0
-                rvol = today_vol / avg_vol if avg_vol > 0 else 1.0
-            except:
-                rvol = 1.0
+            
+            # TODAY'S VOLUME ONLY (fixed!)
+            vol_col = ('Volume', sym)
+            today_vol_series = intra_today.get(vol_col, pd.Series(dtype=float))
+            today_vol = today_vol_series.sum() if not today_vol_series.empty else 0.0
+            
+            # Avg vol (last ~7 trading days)
+            hist_vol_series = hist_data.get(('Volume', sym), pd.Series(dtype=float))
+            avg_vol = hist_vol_series.iloc[-8:-1].mean() if len(hist_vol_series) >= 8 else 1.0
+            rvol = today_vol / avg_vol if avg_vol > 0 else 1.0
+            
+            # Gap % using first open of TODAY
+            open_col = ('Open', sym)
+            open_series = intra_today.get(open_col, pd.Series(dtype=float))
+            today_open = open_series.iloc[0] if not open_series.empty else price
+            gap_pct = ((today_open - prev_close) / prev_close * 100) if prev_close > 0 else 0.0
+            
             rows.append({
                 "Asset": label, "Symbol": sym, "Price": round(price, 4),
                 "Gap %": round(gap_pct, 2), "Change %": round(change, 2), "RVOL": round(rvol, 2)
@@ -312,112 +391,18 @@ def calc_gamma_vectorized(S, K, T, v, r, q, types, OI):
     val = gamma * OI * 100 * S
     return np.where(types == 'call', val, -val)
 
-@st.cache_data(ttl=180)
-def get_theme_stock_news(max_stocks=30):
-    news_items = []
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-    for sym in ANALYST_SYMBOLS[:max_stocks]:
-        try:
-            f_sym = "BTC" if sym == "BTC-USD" else sym.split("=")[0]
-            url = f"https://finviz.com/quote.ashx?t={f_sym.upper()}"
-            r = requests.get(url, headers=headers, timeout=10)
-            soup = BeautifulSoup(r.text, "html.parser")
-            table = soup.find("table", class_="news-table")
-            if not table: continue
-            for row in table.find_all("tr")[:8]:
-                tds = row.find_all("td")
-                if len(tds) < 2: continue
-                time_str = tds[0].text.strip()
-                a_tag = tds[1].find("a")
-                if not a_tag: continue
-                title = a_tag.text.strip()
-                if len(title) < 25: continue
-                if not is_high_impact(title): continue
-                link = a_tag.get("href")
-                if not link.startswith("http"): link = "https://finviz.com" + link
-                label, sent_score = get_sentiment_score(title)
-                imp_score = impact_score(title)
-                news_items.append({
-                    "Asset": symbol_to_label.get(sym, sym), "Symbol": sym, "Title": title,
-                    "URL": link, "Source": "Finviz", "Sentiment": label,
-                    "Score": sent_score, "Impact": imp_score, "Time": time_str
-                })
-        except:
-            continue
-    df = pd.DataFrame(news_items)
-    if not df.empty:
-        df = df.sort_values(by=["Impact", "Score"], ascending=False).drop_duplicates(subset=["Title"])
-    return df
-
-@st.cache_data(ttl=180)
-def get_mag7_hot_news():
-    news_items = []
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-    for sym in MAG7_HOT_SYMBOLS:
-        try:
-            f_sym = "BTC" if sym == "BTC-USD" else sym.split("=")[0]
-            url = f"https://finviz.com/quote.ashx?t={f_sym.upper()}"
-            r = requests.get(url, headers=headers, timeout=10)
-            soup = BeautifulSoup(r.text, "html.parser")
-            table = soup.find("table", class_="news-table")
-            if not table: continue
-            for row in table.find_all("tr")[:10]:
-                tds = row.find_all("td")
-                if len(tds) < 2: continue
-                time_str = tds[0].text.strip()
-                a_tag = tds[1].find("a")
-                if not a_tag: continue
-                title = a_tag.text.strip()
-                if len(title) < 25: continue
-                if not is_high_impact(title): continue
-                link = a_tag.get("href")
-                if not link.startswith("http"): link = "https://finviz.com" + link
-                label, sent_score = get_sentiment_score(title)
-                imp_score = impact_score(title)
-                news_items.append({
-                    "Asset": symbol_to_label.get(sym, sym), "Symbol": sym, "Title": title,
-                    "URL": link, "Source": "Finviz", "Sentiment": label,
-                    "Score": sent_score, "Impact": imp_score, "Time": time_str
-                })
-        except:
-            continue
-    df = pd.DataFrame(news_items)
-    if not df.empty:
-        df = df.sort_values(by=["Impact", "Score"], ascending=False).drop_duplicates(subset=["Title"])
-    return df
-
-@st.cache_data(ttl=300)
-def get_macro_news():
-    try:
-        return News().get_news()['news'].head(25).to_dict('records')
-    except:
-        try:
-            headers = {"User-Agent": "Mozilla/5.0"}
-            r = requests.get("https://finviz.com/news.ashx", headers=headers, timeout=10)
-            soup = BeautifulSoup(r.text, "html.parser")
-            table = soup.find("table", id="news-table")
-            if not table: return []
-            news_list = []
-            for row in table.find_all("tr")[:25]:
-                cells = row.find_all("td")
-                if len(cells) != 2: continue
-                a = cells[1].find("a", class_="tab-link-news")
-                if a:
-                    news_list.append({"Title": a.text.strip(), "URL": a["href"], "Source": "Finviz", "Date": cells[0].text.strip()})
-            return news_list
-        except:
-            return []
-
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=7200)  # Analyst ratings change slowly + Alpha Vantage limit
 def get_alphavantage_analyst_ratings():
     ratings = []
-    for sym in ANALYST_SYMBOLS[:60]:
+    MAX_CALLS = 25  # Alpha Vantage free tier daily limit
+    for sym in ANALYST_SYMBOLS[:MAX_CALLS]:
         try:
             url = f"https://www.alphavantage.co/query?function=OVERVIEW&symbol={sym}&apikey={ALPHA_VANTAGE_API_KEY}"
             r = requests.get(url, timeout=15)
             r.raise_for_status()
             data = r.json()
-            if "AnalystRatingStrongBuy" not in data: continue
+            if "AnalystRatingStrongBuy" not in data or int(data.get("AnalystRatingStrongBuy", 0)) + int(data.get("AnalystRatingBuy", 0)) == 0:
+                continue
 
             strong_buy = int(data.get("AnalystRatingStrongBuy", 0))
             buy = int(data.get("AnalystRatingBuy", 0))
@@ -429,23 +414,28 @@ def get_alphavantage_analyst_ratings():
 
             score = (strong_buy*5 + buy*4 + hold*3 + sell*2 + strong_sell*1) / total
             if score >= 4.5:
-                consensus = "🚀 Strong Buy"
-                bull_score = 5
+                consensus = "🚀 Strong Buy"; bull_score = 5
             elif score >= 3.5:
-                consensus = "🟢 Buy"
-                bull_score = 4
+                consensus = "🟢 Buy"; bull_score = 4
             elif score >= 2.5:
-                consensus = "⚖️ Hold"
-                bull_score = 3
+                consensus = "⚖️ Hold"; bull_score = 3
             elif score >= 1.5:
-                consensus = "🔴 Sell"
-                bull_score = 2
+                consensus = "🔴 Sell"; bull_score = 2
             else:
-                consensus = "💥 Strong Sell"
-                bull_score = 1
+                consensus = "💥 Strong Sell"; bull_score = 1
 
             target_mean = float(data.get("AnalystTargetPrice", 0)) if data.get("AnalystTargetPrice") else None
-            current_price = market_df[market_df["Symbol"] == sym]["Price"].iloc[0] if not market_df[market_df["Symbol"] == sym].empty else None
+            
+            # Fresh current price (no global dependency)
+            current_price = None
+            try:
+                tk = yf.Ticker(sym)
+                fast = tk.fast_info
+                current_price = fast.get('lastPrice') or fast.get('regularMarketPrice') or fast.get('previousClose')
+                current_price = float(current_price) if current_price else None
+            except:
+                pass
+
             upside = ((target_mean - current_price) / current_price * 100) if target_mean and current_price and current_price > 0 else None
 
             ratings.append({
@@ -467,7 +457,7 @@ def get_alphavantage_analyst_ratings():
             continue
     return pd.DataFrame(ratings)
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=300)
 def get_finnhub_general_news():
     url = f"https://finnhub.io/api/v1/news?category=general&token={FINNHUB_API_KEY}"
     try:
@@ -492,6 +482,28 @@ def get_finnhub_general_news():
     except:
         return pd.DataFrame()
 
+@st.cache_data(ttl=900)
+def get_macro_news():
+    try:
+        return News().get_news()['news'].head(25).to_dict('records')
+    except:
+        try:
+            headers = {"User-Agent": "Mozilla/5.0"}
+            r = requests.get("https://finviz.com/news.ashx", headers=headers, timeout=10)
+            soup = BeautifulSoup(r.text, "html.parser")
+            table = soup.find("table", id="news-table")
+            if not table: return []
+            news_list = []
+            for row in table.find_all("tr")[:25]:
+                cells = row.find_all("td")
+                if len(cells) != 2: continue
+                a = cells[1].find("a", class_="tab-link-news")
+                if a:
+                    news_list.append({"Title": a.text.strip(), "URL": a["href"], "Source": "Finviz", "Date": cells[0].text.strip()})
+            return news_list
+        except:
+            return []
+
 # ================================================
 # MAIN APP
 # ================================================
@@ -500,7 +512,7 @@ est = pytz.timezone('US/Eastern')
 time_now = datetime.datetime.now(est).strftime('%H:%M:%S')
 
 st.title("🏛️ Alpha Terminal Pro")
-st.caption(f"EST {time_now} | Data as of {datetime.date.today()} | Day-Trader Edition with Macro Pulse")
+st.caption(f"EST {time_now} | Data as of {datetime.date.today()} | Day-Trader Edition with Macro Pulse | Last refreshed: {datetime.datetime.now(est).strftime('%H:%M:%S')}")
 
 # ────────────────────────────────────────────────
 #  SIDEBAR VOLUME SURGE ALERT
@@ -526,8 +538,9 @@ st.sidebar.markdown("---")
 
 col_refresh = st.columns([7, 1])
 with col_refresh[1]:
-    if st.button("🔄 Refresh Now", use_container_width=True):
-        st.cache_data.clear()
+    if st.button("🔄 Refresh Live Data", use_container_width=True):
+        fetch_market_snapshot.clear()
+        get_finviz_news_bulk.clear()
         st.rerun()
 
 # ────────────────────────────────────────────────
@@ -619,7 +632,6 @@ with tab_rel_strength:
     st.caption("Today's performance relative to SPY (since previous close) • Strongest at top")
 
     try:
-        benchmark = "SPY"
         spy_row = market_df[market_df['Asset'] == "SPY"]
         spy_change = spy_row['Change %'].iloc[0] if not spy_row.empty else 0.0
 
@@ -627,7 +639,6 @@ with tab_rel_strength:
         sector_df = market_df[market_df['Symbol'].isin(sector_symbols)].copy()
         sector_df['vs SPY (%)'] = (sector_df['Change %'] - spy_change).round(2)
 
-        # Horizontal bar chart - current day relative strength
         df_plot = sector_df.sort_values('vs SPY (%)', ascending=False)
         fig = px.bar(
             df_plot,
@@ -665,7 +676,6 @@ with tab_rel_strength:
     st.caption("Today's performance relative to QQQ • Strongest at top")
 
     try:
-        benchmark = "QQQ"
         qqq_row = market_df[market_df['Asset'] == "QQQ"]
         qqq_change = qqq_row['Change %'].iloc[0] if not qqq_row.empty else 0.0
 
@@ -673,7 +683,6 @@ with tab_rel_strength:
         mag7_df = market_df[market_df['Symbol'].isin(mag7_symbols)].copy()
         mag7_df['vs QQQ (%)'] = (mag7_df['Change %'] - qqq_change).round(2)
 
-        # Horizontal bar chart - current day relative strength
         df_plot = mag7_df.sort_values('vs QQQ (%)', ascending=False)
         fig = px.bar(
             df_plot,
@@ -786,7 +795,7 @@ with tab_earnings:
 
 with tab_analyst:
     st.subheader("📊 Analyst Ratings & Price Targets (Alpha Vantage)")
-    st.caption("Live consensus + mean price target • Cached 1 hour")
+    st.caption("⚠️ Limited to top 25 symbols (Alpha Vantage free tier = 25 calls/day). Cached 24h.")
     analyst_df = get_alphavantage_analyst_ratings()
     if not analyst_df.empty:
         analyst_df = analyst_df.sort_values('Bull Score', ascending=False)
@@ -814,7 +823,7 @@ with tab_analyst:
             use_container_width=True
         )
     else:
-        st.info("Fetching analyst ratings... (Alpha Vantage free tier limit)")
+        st.info("No ratings fetched (daily limit reached or no data). Try again tomorrow or upgrade Alpha Vantage.")
 
 with tab_macro:
     st.subheader("🌍 Macro & Market-Moving News")
@@ -871,7 +880,7 @@ with tab_finnhub:
 with tab_news:
     st.subheader("🔥 Hot Mag7 + SPY/QQQ News")
     st.caption("Market-moving news for the most important assets")
-    hot_df = get_mag7_hot_news()
+    hot_df = get_finviz_news_bulk(MAG7_HOT_SYMBOLS, max_stocks=20)
     if not hot_df.empty:
         for _, row in hot_df.iterrows():
             impact_emoji = "🔥" if row['Impact'] >= 5 else "⚡" if row['Impact'] >= 3 else "📈"
@@ -880,7 +889,7 @@ with tab_news:
                 st.write(f"[🔗 Read full story]({row['URL']})")
     st.markdown("---")
     st.subheader("📰 High-Impact Theme Stocks News")
-    news_df = get_theme_stock_news()
+    news_df = get_finviz_news_bulk(ANALYST_SYMBOLS, max_stocks=35)
     if not news_df.empty:
         total_score = news_df['Score'].sum()
         st.sidebar.metric("Theme Sentiment Pulse", total_score, delta="Positive" if total_score >= 0 else "Negative")
@@ -922,6 +931,6 @@ with tab_bias:
     )
 
 # ────────────────────────────────────────────────
-#  AUTO-REFRESH
+#  AUTO-REFRESH (45s = perfect balance for day trading)
 # ────────────────────────────────────────────────
 st_autorefresh(interval=45000, key="global_refresh")
