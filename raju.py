@@ -615,50 +615,95 @@ with tab_themes:
                 st.warning(f"No data for {theme}")
 
 with tab_rel_strength:
-    st.subheader("⚖️ Sector Strength vs SPY")
-    st.caption("5-Day Cumulative Performance normalized to 0%")
+    st.subheader("⚖️ Sector Current Day Strength vs SPY")
+    st.caption("Today's performance relative to SPY (since previous close) • Strongest at top")
+
     try:
         benchmark = "SPY"
-        sector_symbols = list(SECTOR_TICKERS.values())
-        plot_df = hist_data['Close'][[benchmark] + sector_symbols].dropna(how='all')
-        normalized_df = (plot_df / plot_df.iloc[0] - 1) * 100
-        melt_df = normalized_df.reset_index()
-        melt_df = melt_df.rename(columns={melt_df.columns[0]: 'Date'})
-        fig = px.line(melt_df.melt(id_vars='Date', var_name='Ticker', value_name='Perf %'),
-                      x='Date', y='Perf %', color='Ticker', template="plotly_dark", height=500)
-        fig.update_traces(patch={"line": {"width": 4, "dash": "dot"}}, selector={"legendgroup": "SPY"})
-        st.plotly_chart(fig, use_container_width=True)
-        st.write("### Alpha Delta (Current vs SPY)")
-        current_perf = normalized_df.iloc[-1]
-        rel_perf = (current_perf - current_perf[benchmark]).round(2).reset_index()
-        rel_perf.columns = ['Ticker', 'vs SPY (%)']
-        st.dataframe(rel_perf.sort_values('vs SPY (%)', ascending=False).style.background_gradient(cmap='RdYlGn'),
-                     hide_index=True, use_container_width=True)
-    except Exception as e: 
-        st.error(f"RS Error: {e}")
+        spy_row = market_df[market_df['Asset'] == "SPY"]
+        spy_change = spy_row['Change %'].iloc[0] if not spy_row.empty else 0.0
 
-    st.subheader("⚖️ Mag7 Strength vs QQQ")
-    st.caption("5-Day Cumulative Performance normalized to 0%")
+        sector_symbols = list(SECTOR_TICKERS.values())
+        sector_df = market_df[market_df['Symbol'].isin(sector_symbols)].copy()
+        sector_df['vs SPY (%)'] = (sector_df['Change %'] - spy_change).round(2)
+
+        # Horizontal bar chart - current day relative strength
+        df_plot = sector_df.sort_values('vs SPY (%)', ascending=False)
+        fig = px.bar(
+            df_plot,
+            x='vs SPY (%)',
+            y='Asset',
+            orientation='h',
+            color='vs SPY (%)',
+            color_continuous_scale='RdYlGn',
+            title="Sectors Current Day Strength vs SPY",
+            template="plotly_dark",
+            height=520
+        )
+        fig.update_layout(
+            xaxis_title="Relative Strength vs SPY (%)",
+            yaxis_title="",
+            xaxis=dict(tickformat=".1f")
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.write("### Alpha Delta (Today vs SPY)")
+        st.dataframe(
+            sector_df[['Asset', 'Price', 'Change %', 'vs SPY (%)', 'RVOL']]
+            .sort_values('vs SPY (%)', ascending=False)
+            .style.background_gradient(cmap='RdYlGn', subset=['vs SPY (%)', 'Change %'])
+            .format({"Price": "${:,.2f}", "Change %": "{:+.2f}%", "vs SPY (%)": "{:+.2f}%", "RVOL": "{:.2f}x"}),
+            hide_index=True,
+            use_container_width=True
+        )
+    except Exception as e:
+        st.error(f"Sector RS Error: {e}")
+
+    st.markdown("---")
+
+    st.subheader("⚖️ Mag7 Current Day Strength vs QQQ")
+    st.caption("Today's performance relative to QQQ • Strongest at top")
+
     try:
         benchmark = "QQQ"
-        mag7_symbols = list(MAG7_TICKERS.values())
-        plot_df = hist_data['Close'][[benchmark] + mag7_symbols].dropna(how='all')
-        normalized_df = (plot_df / plot_df.iloc[0] - 1) * 100
-        melt_df = normalized_df.reset_index()
-        melt_df = melt_df.rename(columns={melt_df.columns[0]: 'Date'})
-        fig = px.line(melt_df.melt(id_vars='Date', var_name='Ticker', value_name='Perf %'),
-                      x='Date', y='Perf %', color='Ticker', template="plotly_dark", height=500)
-        fig.update_traces(patch={"line": {"width": 4, "dash": "dot"}}, selector={"legendgroup": "QQQ"})
-        st.plotly_chart(fig, use_container_width=True)
-        st.write("### Alpha Delta (Current vs QQQ)")
-        current_perf = normalized_df.iloc[-1]
-        rel_perf = (current_perf - current_perf[benchmark]).round(2).reset_index()
-        rel_perf.columns = ['Ticker', 'vs QQQ (%)']
-        st.dataframe(rel_perf.sort_values('vs QQQ (%)', ascending=False).style.background_gradient(cmap='RdYlGn'),
-                     hide_index=True, use_container_width=True)
-    except Exception as e: 
-        st.error(f"Mag7 RS Error: {e}")
+        qqq_row = market_df[market_df['Asset'] == "QQQ"]
+        qqq_change = qqq_row['Change %'].iloc[0] if not qqq_row.empty else 0.0
 
+        mag7_symbols = list(MAG7_TICKERS.values())
+        mag7_df = market_df[market_df['Symbol'].isin(mag7_symbols)].copy()
+        mag7_df['vs QQQ (%)'] = (mag7_df['Change %'] - qqq_change).round(2)
+
+        # Horizontal bar chart - current day relative strength
+        df_plot = mag7_df.sort_values('vs QQQ (%)', ascending=False)
+        fig = px.bar(
+            df_plot,
+            x='vs QQQ (%)',
+            y='Asset',
+            orientation='h',
+            color='vs QQQ (%)',
+            color_continuous_scale='RdYlGn',
+            title="Mag7 Current Day Strength vs QQQ",
+            template="plotly_dark",
+            height=520
+        )
+        fig.update_layout(
+            xaxis_title="Relative Strength vs QQQ (%)",
+            yaxis_title="",
+            xaxis=dict(tickformat=".1f")
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.write("### Alpha Delta (Today vs QQQ)")
+        st.dataframe(
+            mag7_df[['Asset', 'Price', 'Change %', 'vs QQQ (%)', 'RVOL']]
+            .sort_values('vs QQQ (%)', ascending=False)
+            .style.background_gradient(cmap='RdYlGn', subset=['vs QQQ (%)', 'Change %'])
+            .format({"Price": "${:,.2f}", "Change %": "{:+.2f}%", "vs QQQ (%)": "{:+.2f}%", "RVOL": "{:.2f}x"}),
+            hide_index=True,
+            use_container_width=True
+        )
+    except Exception as e:
+        st.error(f"Mag7 RS Error: {e}")
 
 with tab_gex:
     st.subheader("📊 Gamma Exposure (GEX) + Gamma Flip Level")
