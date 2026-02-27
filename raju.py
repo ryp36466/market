@@ -281,8 +281,8 @@ def fetch_market_snapshot():
     now_est = datetime.datetime.now(est)
     today_date = now_est.date()
     
-    hist_data = yf.download(ALL_SYMBOLS, period="10d", interval="1d", progress=False, auto_adjust=True)
-    intra = yf.download(ALL_SYMBOLS, period="2d", interval="5m", prepost=True, progress=False, auto_adjust=True)
+    hist_data = yf.download(ALL_SYMBOLS, period="10d", interval="1d", progress=False, auto_adjust=True, threads=False)
+    intra = yf.download(ALL_SYMBOLS, period="2d", interval="5m", prepost=True, progress=False, auto_adjust=True, threads=False)
     
     if intra.index.tz is None:
         intra = intra.tz_localize('UTC').tz_convert('US/Eastern')
