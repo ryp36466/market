@@ -188,6 +188,61 @@ def get_finviz_news_bulk(symbols: list, max_stocks: int = 30, max_news_per_stock
     return df
 
 # ================================================
+# ALPHA VANTAGE SENTIMENT NEWS
+# ================================================
+@st.cache_data(ttl=300)
+def get_alpha_sentiment_news():
+    today = datetime.date.today().strftime('%Y%m%d')
+    time_from = f"{today}T0000"
+    time_to = f"{today}T2359"
+    url = f"https://www.alphavantage.co/query?function=NEWS_SENTIMENT&time_from={time_from}&time_to={time_to}&sort=RELEVANCE&limit=50&apikey={ALPHA_VANTAGE_API_KEY}"
+    try:
+        r = requests.get(url, timeout=10)
+        data = r.json()
+        items = []
+        seen_titles = set()
+        for article in data.get('feed', []):
+            title = article['title']
+            if title in seen_titles: continue
+            seen_titles.add(title)
+            url_link = article['url']
+            time_pub = article['time_published']
+            dt = datetime.datetime.strptime(time_pub, '%Y%m%dT%H%M%S')
+            est_time = dt.astimezone(pytz.timezone('US/Eastern')).strftime('%H:%M')
+            for ts in article.get('ticker_sentiment', []):
+                ticker = ts['ticker']
+                ts_label = ts['ticker_sentiment_label']
+                ts_score = float(ts['ticker_sentiment_score'])
+                if abs(ts_score) < 0.1: continue
+                if ts_score > 0:
+                    sent = "🟢 Bullish" if ts_score > 0.2 else "🟡 Mild Bull"
+                else:
+                    sent = "🔴 Bearish" if ts_score < -0.2 else "🟠 Mild Bear"
+                items.append({
+                    "Symbol": ticker,
+                    "Title": title,
+                    "Sentiment": sent,
+                    "Score": round(ts_score, 2),
+                    "Time": est_time,
+                    "URL": url_link,
+                    "Source": article['source']
+                })
+        df = pd.DataFrame(items)
+        if not df.empty:
+            df = df.sort_values('Score', ascending=False)
+        return df
+    except:
+        return pd.DataFrame()
+
+# ================================================
+# SECTOR NEWS (Using Finviz for Sector ETFs)
+# ================================================
+@st.cache_data(ttl=180)
+def get_sector_news():
+    sector_symbols = list(SECTOR_TICKERS.values())
+    return get_finviz_news_bulk(sector_symbols, max_stocks=20, max_news_per_stock=5)
+
+# ================================================
 # CACHED DATA FUNCTIONS (Optimized)
 # ================================================
 @st.cache_data(ttl=300)
@@ -516,6 +571,18 @@ with tab_sectors:
         neo_data = market_df[market_df['Asset'].isin(NEO_CLOUD_TICKERS.keys())].copy()
         st.dataframe(neo_data[['Asset', 'Price', 'Change %', 'RVOL']].style.background_gradient(cmap='RdYlGn', subset=['Change %', 'RVOL']), hide_index=True, use_container_width=True)
 
+    st.markdown("---")
+    st.subheader("📰 High-Impact Sector News")
+    sector_news_df = get_sector_news()
+    if not sector_news_df.empty:
+        for _, row in sector_news_df.iterrows():
+            impact_emoji = "🔥" if row['Impact'] >= 5 else "⚡" if row['Impact'] >= 3 else "📈"
+            with st.expander(f"{impact_emoji} {row['Sentiment']} | {row['Asset']} | {row['Title'][:92]}... • {row['Time']}"):
+                st.write(f"**Source:** {row['Source']} | Impact Score: {row['Impact']}")
+                st.write(f"[🔗 Read full story]({row['URL']})")
+    else:
+        st.info("No high-impact sector news...")
+
 with tab_themes:
     st.subheader("🎯 Active Trading Themes")
     st.caption("Categorized buckets to identify leading/lagging sectors at the open.")
@@ -697,6 +764,16 @@ with tab_news:
                 st.write(f"[🔗 Read full story]({row['URL']})")
     else:
         st.info("Fetching high-impact theme news...")
+    st.markdown("---")
+    st.subheader("📰 Bullish & Bearish Sentiment News (Any Stocks)")
+    sent_news_df = get_alpha_sentiment_news()
+    if not sent_news_df.empty:
+        for _, row in sent_news_df.iterrows():
+            with st.expander(f"{row['Sentiment']} | {row['Symbol']} | {row['Title'][:90]}... • {row['Time']}"):
+                st.write(f"**Source:** {row['Source']} | Score: {row['Score']}")
+                st.write(f"[🔗 Read full story]({row['URL']})")
+    else:
+        st.info("No bullish/bearish sentiment news available or fetching...")
 
 with tab_bias:
     st.subheader("🔍 Market Bias & Gap Analysis")
