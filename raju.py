@@ -275,14 +275,30 @@ def get_macro_drivers():
     except: pass
     return pd.DataFrame(drivers)
 
+def download_in_chunks(symbols, chunk_size=50, **kwargs):
+    chunks = [symbols[i:i + chunk_size] for i in range(0, len(symbols), chunk_size)]
+    dfs = []
+    for chunk in chunks:
+        try:
+            df = yf.download(chunk, **kwargs)
+            dfs.append(df)
+        except:
+            pass
+    if dfs:
+        return pd.concat(dfs, axis=1)
+    else:
+        return pd.DataFrame()
+
 @st.cache_data(ttl=15)
 def fetch_market_snapshot():
     est = pytz.timezone('US/Eastern')
     now_est = datetime.datetime.now(est)
     today_date = now_est.date()
     
-    hist_data = yf.download(ALL_SYMBOLS, period="10d", interval="1d", progress=False, auto_adjust=True, threads=False)
-    intra = yf.download(ALL_SYMBOLS, period="2d", interval="5m", prepost=True, progress=False, auto_adjust=True, threads=False)
+    download_kwargs = {"progress": False, "auto_adjust": True, "threads": False}
+    
+    hist_data = download_in_chunks(ALL_SYMBOLS, period="10d", interval="1d", **download_kwargs)
+    intra = download_in_chunks(ALL_SYMBOLS, period="2d", interval="5m", prepost=True, **download_kwargs)
     
     if intra.index.tz is None:
         intra = intra.tz_localize('UTC').tz_convert('US/Eastern')
@@ -295,21 +311,29 @@ def fetch_market_snapshot():
     for sym in ALL_SYMBOLS:
         label = symbol_to_label.get(sym, sym)
         try:
-            tk = yf.Ticker(sym)
-            fast = tk.fast_info
-            price = fast.get('lastPrice') or fast.get('regularMarketPrice') or fast.get('previousClose')
-            prev_close = fast.get('regularMarketPreviousClose') or fast.get('previousClose')
-            if price is None or prev_close is None or prev_close <= 0:
+            close_col = ('Close', sym)
+            if close_col not in intra.columns or close_col not in hist_data.columns:
                 continue
-            price = float(price)
-            prev_close = float(prev_close)
+            
+            intra_close = intra[close_col].dropna()
+            hist_close = hist_data[close_col].dropna()
+            
+            if intra_close.empty or hist_close.empty:
+                continue
+            
+            price = intra_close.iloc[-1]
+            prev_close = hist_close.iloc[-1]
+            
+            if pd.isna(price) or pd.isna(prev_close) or prev_close <= 0:
+                continue
+            
             change = ((price - prev_close) / prev_close * 100)
             
             vol_col = ('Volume', sym)
             today_vol_series = intra_today.get(vol_col, pd.Series(dtype=float))
             today_vol = today_vol_series.sum() if not today_vol_series.empty else 0.0
             
-            hist_vol_series = hist_data.get(('Volume', sym), pd.Series(dtype=float))
+            hist_vol_series = hist_data.get(vol_col, pd.Series(dtype=float))
             avg_vol = hist_vol_series.iloc[-8:-1].mean() if len(hist_vol_series) >= 8 else 1.0
             rvol = today_vol / avg_vol if avg_vol > 0 else 1.0
             
@@ -318,17 +342,15 @@ def fetch_market_snapshot():
             today_open = open_series.iloc[0] if not open_series.empty else price
             gap_pct = ((today_open - prev_close) / prev_close * 100) if prev_close > 0 else 0.0
 
-            close_series = hist_data.get(('Close', sym), pd.Series(dtype=float))
-            vol_series = hist_data.get(('Volume', sym), pd.Series(dtype=float))
             prev_day_change = 0.0
             prev_vol = 1.0
             vol_ratio = 1.0
-            if len(close_series) >= 2:
-                p_close = close_series.iloc[-2]
-                pp_close = close_series.iloc[-3] if len(close_series) >= 3 else p_close
+            if len(hist_close) >= 2:
+                p_close = hist_close.iloc[-2]
+                pp_close = hist_close.iloc[-3] if len(hist_close) >= 3 else p_close
                 prev_day_change = ((p_close - pp_close) / pp_close * 100) if pp_close > 0 else 0.0
-            if len(vol_series) >= 1:
-                prev_vol = vol_series.iloc[-1]
+            if len(hist_vol_series) >= 1:
+                prev_vol = hist_vol_series.iloc[-1]
             vol_ratio = today_vol / prev_vol if prev_vol > 0 else 1.0
 
             rows.append({
@@ -337,9 +359,12 @@ def fetch_market_snapshot():
                 "Prev Day Change %": round(prev_day_change, 2),
                 "Vol Ratio (Today/Prev)": round(vol_ratio, 1)
             })
-        except:
+        except Exception as e:
             continue
-    return pd.DataFrame(rows), intra, hist_data
+    market_df = pd.DataFrame(rows)
+    if market_df.empty:
+        st.error("No market data fetched. Possible issue with data download or invalid tickers.")
+    return market_df, intra, hist_data
 
 @st.cache_data(ttl=180)
 def get_finnhub_econ_calendar():
@@ -430,7 +455,10 @@ st.caption(f"EST {time_now} | Data as of {datetime.date.today()} | Day-Trader Ed
 st.sidebar.title("🚨 LIVE VOLUME SURGE ALERTS")
 threshold = st.sidebar.slider("RVOL Surge Threshold (x)", 1.5, 10.0, 3.0, 0.5)
 
-alert_df = market_df[(market_df['Symbol'].isin(USER_HOT_LIST)) & (market_df['RVOL'] >= threshold)].copy()
+if not market_df.empty:
+    alert_df = market_df[(market_df['Symbol'].isin(USER_HOT_LIST)) & (market_df['RVOL'] >= threshold)].copy()
+else:
+    alert_df = pd.DataFrame()
 
 if not alert_df.empty:
     alert_df = alert_df.sort_values('RVOL', ascending=False)
