@@ -199,7 +199,7 @@ def get_alpha_sentiment_news():
             seen_titles.add(title)
             url_link = article['url']
             time_pub = article['time_published']
-            dt = datetime.datetime.strptime(time_pub, '%Y%m%dT%H%M%S')
+            dt = datetime.datetime.strptime(time_pub, '%Y%m%dT%H%M%S').replace(tzinfo=pytz.UTC)
             est_time = dt.astimezone(pytz.timezone('US/Eastern')).strftime('%H:%M')
             for ts in article.get('ticker_sentiment', []):
                 ticker = ts['ticker']
