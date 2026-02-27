@@ -9,7 +9,6 @@ import requests
 from bs4 import BeautifulSoup
 from finvizfinance.news import News
 import plotly.express as px
-import plotly.graph_objects as go
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ================================================
@@ -91,13 +90,6 @@ ALL_SYMBOLS = list(symbol_to_label.keys())
 ANALYST_SYMBOLS = sorted({sym for sublist in TRADING_THEMES.values() for sym in sublist})
 MAG7_HOT_SYMBOLS = list(MAG7_TICKERS.values()) + ["SPY", "QQQ"]
 
-HUGE_CAP_SYMBOLS = {
-    'WMT', 'BABA', 'DE', 'SO', 'NEM', 'BKNG', 'TXRH', 'RIO',
-    'AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META', 'TSLA',
-    'T', 'VZ', 'XOM', 'CVX', 'JPM', 'BAC', 'WFC', 'PG', 'KO',
-    'HD', 'COST', 'NFLX', 'DIS', 'PFE', 'MRK', 'LLY', 'AVGO'
-}
-
 # ================================================
 # NEWS FILTER + HELPERS
 # ================================================
@@ -132,7 +124,7 @@ def get_sentiment_score(text):
     return "⚪ Neutral", 0
 
 # ================================================
-# PARALLEL FINVIZ NEWS SCRAPER (Major Speed Boost)
+# PARALLEL FINVIZ NEWS SCRAPER
 # ================================================
 def scrape_single_finviz_news(sym: str, max_news: int = 8) -> list:
     try:
@@ -211,7 +203,6 @@ def get_alpha_sentiment_news():
             est_time = dt.astimezone(pytz.timezone('US/Eastern')).strftime('%H:%M')
             for ts in article.get('ticker_sentiment', []):
                 ticker = ts['ticker']
-                ts_label = ts['ticker_sentiment_label']
                 ts_score = float(ts['ticker_sentiment_score'])
                 if abs(ts_score) < 0.1: continue
                 if ts_score > 0:
@@ -235,7 +226,7 @@ def get_alpha_sentiment_news():
         return pd.DataFrame()
 
 # ================================================
-# SECTOR NEWS (Using Finviz for Sector ETFs)
+# SECTOR NEWS
 # ================================================
 @st.cache_data(ttl=180)
 def get_sector_news():
@@ -243,7 +234,7 @@ def get_sector_news():
     return get_finviz_news_bulk(sector_symbols, max_stocks=20, max_news_per_stock=5)
 
 # ================================================
-# CACHED DATA FUNCTIONS (Optimized)
+# CACHED DATA FUNCTIONS
 # ================================================
 @st.cache_data(ttl=300)
 def get_etf_crypto_sentiment():
@@ -327,7 +318,6 @@ def fetch_market_snapshot():
             today_open = open_series.iloc[0] if not open_series.empty else price
             gap_pct = ((today_open - prev_close) / prev_close * 100) if prev_close > 0 else 0.0
 
-            # Previous day price action & volume
             close_series = hist_data.get(('Close', sym), pd.Series(dtype=float))
             vol_series = hist_data.get(('Volume', sym), pd.Series(dtype=float))
             prev_day_change = 0.0
@@ -435,7 +425,7 @@ st.title("🏛️ Alpha Terminal Pro")
 st.caption(f"EST {time_now} | Data as of {datetime.date.today()} | Day-Trader Edition with Macro Pulse | Last refreshed: {datetime.datetime.now(est).strftime('%H:%M:%S')}")
 
 # ────────────────────────────────────────────────
-#  SIDEBAR VOLUME SURGE ALERT
+#  SIDEBAR
 # ────────────────────────────────────────────────
 st.sidebar.title("🚨 LIVE VOLUME SURGE ALERTS")
 threshold = st.sidebar.slider("RVOL Surge Threshold (x)", 1.5, 10.0, 3.0, 0.5)
@@ -464,27 +454,24 @@ with col_refresh[1]:
         st.rerun()
 
 # ────────────────────────────────────────────────
-#  TABS (GEX, Options, Earnings, Analyst Ratings removed)
+#  TABS
 # ────────────────────────────────────────────────
-tab_premarket, tab_overview, tab_sectors, tab_themes, tab_rel_strength, tab_macro, tab_finnhub, tab_news, tab_bias = st.tabs([
-    "🌅 Premarket Pulse", "📈 Market Overview", "🔥 Alpha Sectors", "🎯 Trading Themes",
+tab_premarket, tab_overview, tab_top_movers, tab_sectors, tab_themes, tab_rel_strength, tab_macro, tab_finnhub, tab_news, tab_bias = st.tabs([
+    "🌅 Premarket Pulse", "📈 Market Overview", "🚀 Top Movers",
+    "🔥 Alpha Sectors", "🎯 Trading Themes",
     "⚖️ Relative Strength", "🌍 Macro News", "🌐 Finnhub Daily Pulse",
     "📰 High-Impact News", "🔍 Bias & Regime"
 ])
 
 with tab_premarket:
     st.subheader("🌡️ Premarket Pulse — Major Indices & Market Sentiment")
-
     col1, col2 = st.columns([2, 1])
-
     with col1:
         st.markdown("#### 📊 Major Indices Snapshot + Relative Strength")
         major_symbols = ["SPY", "QQQ", "IWM", "^VIX", "BTC-USD"]
         major_df = market_df[market_df['Symbol'].isin(major_symbols)].copy()
-        
         spy_chg = major_df[major_df['Symbol'] == "SPY"]['Change %'].iloc[0] if not major_df[major_df['Symbol'] == "SPY"].empty else 0
         major_df['Rel Strength vs SPY'] = (major_df['Change %'] - spy_chg).round(2)
-        
         st.dataframe(
             major_df[['Asset', 'Price', 'Gap %', 'Change %', 'Rel Strength vs SPY', 'RVOL', 'Prev Day Change %', 'Vol Ratio (Today/Prev)']]
             .style
@@ -492,22 +479,18 @@ with tab_premarket:
             .format({"Price": "${:,.2f}", "Gap %": "{:+.2f}%", "Change %": "{:+.2f}%", "Rel Strength vs SPY": "{:+.2f}%", "Prev Day Change %": "{:+.2f}%", "Vol Ratio (Today/Prev)": "{:.1f}x"}),
             hide_index=True, use_container_width=True
         )
-
     with col2:
         st.markdown("#### 🪙 Bitcoin + VIX Market Sentiment")
         sent_df = get_etf_crypto_sentiment()
         st.dataframe(sent_df, hide_index=True, use_container_width=True)
-
         vix_row = market_df[market_df['Symbol'] == "^VIX"]
         if not vix_row.empty:
             vix_level = vix_row['Price'].iloc[0]
             vix_sent = "🔴 HIGH FEAR" if vix_level > 30 else "🟠 Elevated Fear" if vix_level > 20 else "🟢 Low Fear / Complacent"
             st.metric("VIX Sentiment", vix_sent, f"Level {vix_level:.1f}")
-
         btc_row = market_df[market_df['Symbol'] == "BTC-USD"]
         if not btc_row.empty:
             st.metric("Bitcoin Strength", f"{btc_row['RVOL'].iloc[0]:.1f}x RVOL", f"{btc_row['Change %'].iloc[0]:+.2f}%")
-
     st.markdown("---")
     st.subheader("📰 Market Sentiments Based on News (Major Indices)")
     fn_news = get_finnhub_general_news()
@@ -522,7 +505,6 @@ with tab_premarket:
                     st.write(f"[🔗 Read full story]({row['URL']})")
     else:
         st.info("No major index-specific news right now.")
-
     st.markdown("---")
     st.subheader("📈 Today vs Previous Day Volume & Price Action")
     st.caption("Compares current premarket session vs the most recent full trading day")
@@ -534,7 +516,6 @@ with tab_premarket:
         .format({"Change %": "{:+.2f}%", "Prev Day Change %": "{:+.2f}%", "Vol Ratio (Today/Prev)": "{:.1f}x"}),
         hide_index=True, use_container_width=True
     )
-
     st.markdown("---")
     st.subheader("🌍 Macro News Impacting the Market Right Now")
     macro_df = get_macro_drivers()
@@ -551,7 +532,6 @@ with tab_overview:
     key_assets = ["VIX", "ES (S&P 500 Fut)", "NQ (Nasdaq Fut)", "YM (Dow Fut)", "RTY (Russell 2000)", "SPY", "QQQ", "S&P 500"]
     key_df = market_df[market_df['Asset'].isin(key_assets)][['Asset', 'Price', 'Gap %', 'Change %', 'RVOL']].round(2)
     st.dataframe(key_df.style.background_gradient(cmap='RdYlGn', subset=['Change %', 'Gap %', 'RVOL']), hide_index=True, use_container_width=True)
-
     st.subheader("🚀 Magnificent 7")
     mag7_df = market_df[market_df['Asset'].isin(MAG7_TICKERS.keys())].copy().sort_values('Change %', ascending=False)
     spy_change = mag7_df[mag7_df['Asset'] == "SPY"]['Change %'].iloc[0] if not mag7_df[mag7_df['Asset'] == "SPY"].empty else 0
@@ -559,6 +539,36 @@ with tab_overview:
     st.dataframe(mag7_df[['Asset', 'Price', 'Change %', 'vs SPY (%)', 'RVOL']].round(2)
                  .style.background_gradient(cmap='RdYlGn', subset=['Change %', 'vs SPY (%)', 'RVOL']),
                  hide_index=True, use_container_width=True)
+
+with tab_top_movers:
+    st.subheader("🚀 Top Movers & Biggest Losers (Today)")
+    st.caption("Real-time gap + % change + RVOL • Updated live")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**🔥 Top 15 Gainers**")
+        movers = market_df.nlargest(15, 'Change %')
+        st.dataframe(
+            movers[['Asset', 'Symbol', 'Price', 'Change %', 'Gap %', 'RVOL']]
+            .style
+            .background_gradient(cmap='RdYlGn', subset=['Change %'])
+            .background_gradient(cmap='Reds', subset=['RVOL'])
+            .format({"Price": "${:,.2f}", "Change %": "{:+.2f}%", "Gap %": "{:+.2f}%", "RVOL": "{:.1f}x"}),
+            hide_index=True,
+            use_container_width=True
+        )
+    with col2:
+        st.markdown("**🔻 Top 15 Losers**")
+        losers = market_df.nsmallest(15, 'Change %')
+        st.dataframe(
+            losers[['Asset', 'Symbol', 'Price', 'Change %', 'Gap %', 'RVOL']]
+            .style
+            .background_gradient(cmap='RdYlGn_r', subset=['Change %'])
+            .background_gradient(cmap='Reds', subset=['RVOL'])
+            .format({"Price": "${:,.2f}", "Change %": "{:+.2f}%", "Gap %": "{:+.2f}%", "RVOL": "{:.1f}x"}),
+            hide_index=True,
+            use_container_width=True
+        )
+    st.caption("💡 High RVOL + big gap = potential explosive moves")
 
 with tab_sectors:
     col_a, col_b = st.columns(2)
@@ -570,7 +580,6 @@ with tab_sectors:
         st.subheader("☁️ Neo Clouds (AI Infrastructure)")
         neo_data = market_df[market_df['Asset'].isin(NEO_CLOUD_TICKERS.keys())].copy()
         st.dataframe(neo_data[['Asset', 'Price', 'Change %', 'RVOL']].style.background_gradient(cmap='RdYlGn', subset=['Change %', 'RVOL']), hide_index=True, use_container_width=True)
-
     st.markdown("---")
     st.subheader("📰 High-Impact Sector News")
     sector_news_df = get_sector_news()
@@ -605,15 +614,12 @@ with tab_themes:
 with tab_rel_strength:
     st.subheader("⚖️ Sector Current Day Strength vs SPY")
     st.caption("Today's performance relative to SPY (since previous close) • Strongest at top")
-
     try:
         spy_row = market_df[market_df['Asset'] == "SPY"]
         spy_change = spy_row['Change %'].iloc[0] if not spy_row.empty else 0.0
-
         sector_symbols = list(SECTOR_TICKERS.values())
         sector_df = market_df[market_df['Symbol'].isin(sector_symbols)].copy()
         sector_df['vs SPY (%)'] = (sector_df['Change %'] - spy_change).round(2)
-
         df_plot = sector_df.sort_values('vs SPY (%)', ascending=False)
         fig = px.bar(
             df_plot,
@@ -632,7 +638,6 @@ with tab_rel_strength:
             xaxis=dict(tickformat=".1f")
         )
         st.plotly_chart(fig, use_container_width=True)
-
         st.write("### Alpha Delta (Today vs SPY)")
         st.dataframe(
             sector_df[['Asset', 'Price', 'Change %', 'vs SPY (%)', 'RVOL']]
@@ -644,20 +649,15 @@ with tab_rel_strength:
         )
     except Exception as e:
         st.error(f"Sector RS Error: {e}")
-
     st.markdown("---")
-
     st.subheader("⚖️ Mag7 Current Day Strength vs QQQ")
     st.caption("Today's performance relative to QQQ • Strongest at top")
-
     try:
         qqq_row = market_df[market_df['Asset'] == "QQQ"]
         qqq_change = qqq_row['Change %'].iloc[0] if not qqq_row.empty else 0.0
-
         mag7_symbols = list(MAG7_TICKERS.values())
         mag7_df = market_df[market_df['Symbol'].isin(mag7_symbols)].copy()
         mag7_df['vs QQQ (%)'] = (mag7_df['Change %'] - qqq_change).round(2)
-
         df_plot = mag7_df.sort_values('vs QQQ (%)', ascending=False)
         fig = px.bar(
             df_plot,
@@ -676,7 +676,6 @@ with tab_rel_strength:
             xaxis=dict(tickformat=".1f")
         )
         st.plotly_chart(fig, use_container_width=True)
-
         st.write("### Alpha Delta (Today vs QQQ)")
         st.dataframe(
             mag7_df[['Asset', 'Price', 'Change %', 'vs QQQ (%)', 'RVOL']]
