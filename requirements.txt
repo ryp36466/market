@@ -9,3 +9,5 @@ requests
 finvizfinance
 streamlit-autorefresh
 beautifulsoup4
+transformers
+torch
