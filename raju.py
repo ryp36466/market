@@ -11,6 +11,8 @@ from finvizfinance.news import News
 import plotly.express as px
 import plotly.graph_objects as go
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from transformers import pipeline
+import torch
 
 # ================================================
 # PAGE CONFIG
@@ -364,6 +366,40 @@ def get_macro_news():
             return []
 
 # ================================================
+# FINBERT LOADER AND HELPER
+# ================================================
+@st.cache_resource(show_spinner="Loading FinBERT model... (first time only)")
+def load_finbert():
+    device = 0 if torch.cuda.is_available() else -1  # GPU if available, else CPU
+    pipe = pipeline(
+        "text-classification",
+        model="ProsusAI/finbert",
+        device=device,
+        torch_dtype=torch.float16 if device == 0 else None  # helps a bit on GPU
+    )
+    return pipe
+
+def get_finbert_sentiment(text: str, pipe) -> dict:
+    if not text.strip():
+        return {"label": "NEUTRAL", "score": 0.0}
+    
+    try:
+        result = pipe(text[:512], truncation=True, max_length=512)[0]  # FinBERT max ~512 tokens
+        label = result['label']          # 'positive', 'negative', 'neutral'
+        score = result['score']
+        
+        if label == 'positive':
+            display = f"🟢 Positive ({score:.0%})"
+        elif label == 'negative':
+            display = f"🔴 Negative ({score:.0%})"
+        else:
+            display = f"⚪ Neutral ({score:.0%})"
+            
+        return {"label": label.upper(), "score": score, "display": display}
+    except Exception as e:
+        return {"label": "ERROR", "score": 0.0, "display": "Error"}
+
+# ================================================
 # MAIN APP
 # ================================================
 market_df, intra_data, hist_data = fetch_market_snapshot()
@@ -394,6 +430,14 @@ else:
     st.sidebar.info("✅ No high-volume surges right now")
 
 st.sidebar.markdown("---")
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("🤖 AI News Sentiment")
+use_finbert = st.sidebar.checkbox(
+    "Use FinBERT (financial LLM sentiment)", 
+    value=False,
+    help="Analyzes high-impact headlines with ProsusAI/finbert • slower but more accurate for finance"
+)
 
 col_refresh = st.columns([7, 1])
 with col_refresh[1]:
@@ -650,21 +694,56 @@ with tab_news:
     st.caption("Market-moving news for the most important assets")
     hot_df = get_finviz_news_bulk(MAG7_HOT_SYMBOLS, max_stocks=20)
     if not hot_df.empty:
+        # Optional: enrich with FinBERT
+        if use_finbert:
+            with st.spinner("Running FinBERT on headlines..."):
+                pipe = load_finbert()
+                sentiments = []
+                for title in hot_df['Title']:
+                    sent = get_finbert_sentiment(title, pipe)
+                    sentiments.append(sent['display'])
+                hot_df['FinBERT AI Sentiment'] = sentiments
+
         for _, row in hot_df.iterrows():
             impact_emoji = "🔥" if row['Impact'] >= 5 else "⚡" if row['Impact'] >= 3 else "📈"
-            with st.expander(f"{impact_emoji} {row['Sentiment']} | {row['Asset']} | {row['Title'][:92]}... • {row['Time']}"):
+            exp_title = f"{impact_emoji} {row['Sentiment']} | {row['Asset']} | {row['Title'][:92]}... • {row['Time']}"
+            
+            if use_finbert and 'FinBERT AI Sentiment' in row:
+                exp_title += f"  |  {row['FinBERT AI Sentiment']}"
+            
+            with st.expander(exp_title):
                 st.write(f"**Source:** {row['Source']} | Impact Score: {row['Impact']}")
+                if use_finbert and 'FinBERT AI Sentiment' in row:
+                    st.write(f"**FinBERT:** {row['FinBERT AI Sentiment']}")
                 st.write(f"[🔗 Read full story]({row['URL']})")
+
     st.markdown("---")
     st.subheader("📰 High-Impact Theme Stocks News")
     news_df = get_finviz_news_bulk(ANALYST_SYMBOLS, max_stocks=35)
     if not news_df.empty:
+        if use_finbert:
+            with st.spinner("Running FinBERT on theme news... (can take 10–60s)"):
+                pipe = load_finbert()
+                sentiments = []
+                for title in news_df['Title']:
+                    sent = get_finbert_sentiment(title, pipe)
+                    sentiments.append(sent['display'])
+                news_df['FinBERT AI Sentiment'] = sentiments
+
         total_score = news_df['Score'].sum()
         st.sidebar.metric("Theme Sentiment Pulse", total_score, delta="Positive" if total_score >= 0 else "Negative")
+
         for _, row in news_df.iterrows():
             impact_emoji = "🔥" if row['Impact'] >= 5 else "⚡" if row['Impact'] >= 3 else "📈"
-            with st.expander(f"{impact_emoji} {row['Sentiment']} | {row['Asset']} | {row['Title'][:92]}... • {row['Time']}"):
+            exp_title = f"{impact_emoji} {row['Sentiment']} | {row['Asset']} | {row['Title'][:92]}... • {row['Time']}"
+            
+            if use_finbert and 'FinBERT AI Sentiment' in row:
+                exp_title += f"  |  {row['FinBERT AI Sentiment']}"
+            
+            with st.expander(exp_title):
                 st.write(f"**Source:** {row['Source']} | Impact Score: {row['Impact']}")
+                if use_finbert and 'FinBERT AI Sentiment' in row:
+                    st.write(f"**FinBERT:** {row['FinBERT AI Sentiment']}")
                 st.write(f"[🔗 Read full story]({row['URL']})")
     else:
         st.info("Fetching high-impact theme news...")
