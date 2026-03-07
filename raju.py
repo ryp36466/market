@@ -23,8 +23,8 @@ st.set_page_config(page_title="Alpha Terminal Pro", page_icon="🏛️", layout=
 # API KEYS (RECOMMENDATION: Move to st.secrets for production)
 # ================================================
 # Change this:
-FINNHUB_API_KEY = st.secrets["FINNHUB_API_KEY"]
-ALPHA_VANTAGE_API_KEY = st.secrets["ALPHA_VANTAGE_API_KEY"]
+FINNHUB_API_KEY = "d6au4n9r01qnr27itio0d6au4n9r01qnr27itiog"
+ALPHA_VANTAGE_API_KEY = "Q6Z6I3QPW56O7NWP"
 
 # ================================================
 # TICKER CONFIGS + TRADING THEMES
