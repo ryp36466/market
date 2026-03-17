@@ -477,10 +477,8 @@ with col_refresh[1]:
 # ────────────────────────────────────────────────
 #  TABS
 # ────────────────────────────────────────────────
-tab_premarket, tab_overview, tab_sectors, tab_themes, tab_rel_strength, tab_macro, tab_finnhub, tab_news, tab_bias = st.tabs([
-    "🌅 Premarket Pulse", "📈 Market Overview", "🔥 Alpha Sectors", "🎯 Trading Themes",
-    "⚖️ Relative Strength", "🌍 Macro News", "🌐 Finnhub Daily Pulse","📊 Analyst Ratings",
-    "📰 High-Impact News", "🔍 Bias & Regime"
+tab_premarket, tab_overview, tab_analyst, tab_news, tab_bias = st.tabs([
+    "🌅 Premarket", "📈 Overview", "📊 Analyst Ratings", "📰 News", "🔍 Bias"
 ])
 
 with tab_premarket:
