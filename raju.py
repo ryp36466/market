@@ -18,7 +18,7 @@ from scipy.stats import norm
 st.set_page_config(page_title="Alpha Terminal Pro", page_icon="🏛️", layout="wide")
 
 # ────────────────────────────────────────────────
-#  YOUR FULL STOCK LIST
+#  YOUR FULL STOCK LIST + CONFIGS
 # ────────────────────────────────────────────────
 USER_HOT_LIST = [
     "NET", "RDDT", "CRCL", "CRWD", "CRM", "BMNR", "UNH", "SOFI", "APP", "ORCL",
@@ -30,9 +30,6 @@ USER_HOT_LIST = [
     "CAT", "FDX", "XOM", "WDC", "SLV", "ZSL", "TQQQ", "STX"
 ]
 
-# ────────────────────────────────────────────────
-#  TICKER CONFIGS + TRADING THEMES
-# ────────────────────────────────────────────────
 GLOBAL_TICKERS = {
     "VIX": "^VIX", "ES (S&P 500 Fut)": "ES=F", "NQ (Nasdaq Fut)": "NQ=F",
     "YM (Dow Fut)": "YM=F", "RTY (Russell 2000)": "RTY=F",
@@ -132,47 +129,60 @@ def get_sentiment_score(text):
     return "⚪ Neutral", 0
 
 # ────────────────────────────────────────────────
-#  DATA FUNCTIONS
+#  FIXED MARKET SNAPSHOT (2025 yfinance compatible)
 # ────────────────────────────────────────────────
-@st.cache_data(ttl=20)
+@st.cache_data(ttl=30)
 def fetch_market_snapshot():
-    hist_data = yf.download(ALL_SYMBOLS, period="10d", interval="1d", progress=False)
-    intra = yf.download(ALL_SYMBOLS, period="2d", interval="5m", prepost=True, progress=False)
+    tickers = yf.Tickers(ALL_SYMBOLS)
+    hist_10d = tickers.history(period="10d", interval="1d", progress=False)
+    intra_5m = tickers.history(period="2d", interval="5m", prepost=True, progress=False)
+
     rows = []
     for sym in ALL_SYMBOLS:
-        label = symbol_to_label.get(sym, sym)
         try:
-            tk = yf.Ticker(sym)
-            fast = tk.fast_info
-            price = fast.get('lastPrice') or fast.get('regularMarketPrice') or fast.get('previousClose')
-            prev_close = fast.get('regularMarketPreviousClose') or fast.get('previousClose')
-            if price is None or prev_close is None or prev_close <= 0: continue
+            label = symbol_to_label.get(sym, sym)
+            tk = tickers.tickers[sym]
+            info = tk.fast_info
+
+            price = info.get('lastPrice') or info.get('regularMarketPrice') or info.get('currentPrice') or info.get('previousClose')
+            prev_close = info.get('regularMarketPreviousClose') or info.get('previousClose')
+            if price is None or prev_close is None or prev_close <= 0:
+                continue
+
             price = float(price)
             prev_close = float(prev_close)
-            change = ((price - prev_close) / prev_close * 100)
+            change_pct = ((price - prev_close) / prev_close) * 100
+
+            # Gap %
+            gap_pct = 0.0
             try:
-                open_series = intra['Open'][sym].dropna()
-                today_open = open_series.iloc[0] if not open_series.empty else price
-                gap_pct = ((today_open - prev_close) / prev_close * 100)
+                opens = intra_5m['Open'].xs(sym, level='Ticker', drop_level=True).dropna()
+                if not opens.empty:
+                    gap_pct = ((opens.iloc[0] - prev_close) / prev_close) * 100
             except:
-                gap_pct = 0.0
+                pass
+
+            # RVOL
+            rvol = 1.0
             try:
-                today_vol = intra['Volume'][sym].sum()
-                avg_vol = hist_data['Volume'][sym].iloc[-8:-1].mean()
-                rvol = today_vol / avg_vol if avg_vol > 0 else 1.0
+                vol_today = intra_5m['Volume'].xs(sym, level='Ticker', drop_level=True).sum()
+                vol_hist = hist_10d['Volume'].xs(sym, level='Ticker', drop_level=True).iloc[-8:-1]
+                avg_vol = vol_hist.mean() if len(vol_hist) > 0 else 0
+                rvol = vol_today / avg_vol if avg_vol > 0 else 1.0
             except:
-                rvol = 1.0
+                pass
+
             rows.append({
                 "Asset": label, "Symbol": sym, "Price": round(price, 4),
-                "Gap %": round(gap_pct, 2), "Change %": round(change, 2), "RVOL": round(rvol, 2)
+                "Gap %": round(gap_pct, 2), "Change %": round(change_pct, 2), "RVOL": round(rvol, 2)
             })
         except:
             continue
-    return pd.DataFrame(rows), intra, hist_data
+    return pd.DataFrame(rows), intra_5m, hist_10d
 
-# Earnings, PCR, Gamma, News, Analyst functions (kept exactly as before)
-# ... (I kept them short here for space — they are the same as in the previous full code)
-
+# ────────────────────────────────────────────────
+#  OTHER DATA FUNCTIONS (earnings, pcr, gamma, news, analyst)
+# ────────────────────────────────────────────────
 def get_earnings_calendar_finnhub(date_str):
     url = f"https://finnhub.io/api/v1/calendar/earnings?from={date_str}&to={date_str}&token={FINNHUB_API_KEY}"
     try:
@@ -181,22 +191,16 @@ def get_earnings_calendar_finnhub(date_str):
         filtered = []; fallback = []
         for item in data.get('earningsCalendar', []):
             symbol = item.get('symbol', '').upper()
-            eps_est = item.get('epsEstimate')
-            eps_act = item.get('epsActual')
-            rev_est = item.get('revenueEstimate')
-            rev_act = item.get('revenueActual')
-            eps_beat = "—"
-            if eps_act is not None and eps_est is not None:
-                eps_beat = "✅ Beat" if eps_act > eps_est else "❌ Miss" if eps_act < eps_est else "Met"
-            rev_beat = "—"
-            if rev_act is not None and rev_est is not None:
-                rev_beat = "✅ Beat" if rev_act > rev_est else "❌ Miss" if rev_act < rev_est else "Met"
-            entry = {"When": "", "Symbol": symbol, "Company": symbol,
-                     "EPS Est": eps_est if eps_est is not None else "—",
-                     "EPS Act": eps_act if eps_act is not None else "—",
-                     "Rev Est (B)": round(rev_est / 1e9, 2) if rev_est else "—",
-                     "Rev Act (B)": round(rev_act / 1e9, 2) if rev_act else "—",
-                     "EPS Beat": eps_beat, "Rev Beat": rev_beat}
+            entry = {
+                "When": "", "Symbol": symbol, "Company": symbol,
+                "EPS Est": item.get('epsEstimate') or "—",
+                "EPS Act": item.get('epsActual') or "—",
+                "Rev Est (B)": round(item.get('revenueEstimate', 0)/1e9, 2) if item.get('revenueEstimate') else "—",
+                "Rev Act (B)": round(item.get('revenueActual', 0)/1e9, 2) if item.get('revenueActual') else "—",
+                "EPS Beat": "—", "Rev Beat": "—"
+            }
+            if entry["EPS Act"] != "—" and entry["EPS Est"] != "—":
+                entry["EPS Beat"] = "✅ Beat" if float(entry["EPS Act"]) > float(entry["EPS Est"]) else "❌ Miss" if float(entry["EPS Act"]) < float(entry["EPS Est"]) else "Met"
             fallback.append(entry)
             if symbol in HUGE_CAP_SYMBOLS:
                 filtered.append(entry)
@@ -233,8 +237,8 @@ def get_pcr_data():
                 cv = pv = 0
                 for exp in opts[:2]:
                     ch = tk.option_chain(exp)
-                    cv += ch.calls['volume'].sum()
-                    pv += ch.puts['volume'].sum()
+                    cv += ch.calls['volume'].sum(skipna=True)
+                    pv += ch.puts['volume'].sum(skipna=True)
                 pcr = pv / cv if cv > 0 else 0
                 results.append({"Asset": label, "PCR": round(pcr, 2),
                                 "Sentiment": "🐂 Bull" if pcr < 0.85 else "🐻 Bear" if pcr > 1.15 else "⚖️ Neu"})
@@ -252,8 +256,6 @@ def calc_gamma_vectorized(S, K, T, v, r, q, types, OI):
 
 @st.cache_data(ttl=180)
 def get_theme_stock_news(max_stocks=30):
-    # ... (same as before - omitted for brevity, copy from previous full code if needed)
-    # (It is unchanged)
     news_items = []
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     for sym in ANALYST_SYMBOLS[:max_stocks]:
@@ -291,7 +293,6 @@ def get_theme_stock_news(max_stocks=30):
 
 @st.cache_data(ttl=180)
 def get_mag7_hot_news():
-    # ... (same as before)
     news_items = []
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     for sym in MAG7_HOT_SYMBOLS:
@@ -351,13 +352,12 @@ def get_macro_news():
 
 @st.cache_data(ttl=1800)
 def get_analyst_ratings():
-    # ... (same as before)
     ratings = []
     rating_map = {"strong_buy": ("🚀 Strong Buy", 5), "buy": ("🟢 Buy", 4), "hold": ("⚖️ Hold", 3), "sell": ("🔴 Sell", 2), "strong_sell": ("💥 Strong Sell", 1)}
     for sym in ANALYST_SYMBOLS:
         try:
             tk = yf.Ticker(sym)
-            info = tk.get_info()
+            info = tk.info
             raw_key = info.get("recommendationKey", None)
             display_name, bull_score = rating_map.get(raw_key, ("—", 0))
             target_mean = info.get("targetMeanPrice")
@@ -377,9 +377,6 @@ def get_analyst_ratings():
             continue
     return pd.DataFrame(ratings)
 
-# ────────────────────────────────────────────────
-#  NEW: FINNHUB DAILY PULSE FUNCTIONS
-# ────────────────────────────────────────────────
 @st.cache_data(ttl=60)
 def get_finnhub_general_news():
     url = f"https://finnhub.io/api/v1/news?category=general&token={FINNHUB_API_KEY}"
@@ -455,16 +452,14 @@ with col_refresh[1]:
         st.cache_data.clear()
         st.rerun()
 
-# TABS WITH NEW FINNHUB PULSE TAB
+# TABS (tab_extremes removed - it was never defined)
 tab_overview, tab_sectors, tab_themes, tab_rel_strength, tab_gex, tab_options, tab_earnings, tab_analyst, tab_macro, tab_finnhub, tab_news, tab_bias = st.tabs([
     "📈 Market Overview", "🔥 Alpha Sectors", "🎯 Trading Themes", "⚖️ Relative Strength",
     "📊 GEX + Gamma Flip", "🐳 Options", "🎯 Earnings", "📊 Analyst Ratings (Yahoo)",
     "🌍 Macro News", "🌐 Finnhub Daily Pulse", "📰 High-Impact News", "🔍 Bias & Regime"
 ])
 
-# All tabs (full code)
 with tab_overview:
-    # (same as before)
     st.subheader("🗝️ Key Indices & Futures")
     key_assets = ["VIX", "ES (S&P 500 Fut)", "NQ (Nasdaq Fut)", "YM (Dow Fut)", "RTY (Russell 2000)", "SPY", "QQQ", "S&P 500"]
     key_df = market_df[market_df['Asset'].isin(key_assets)][['Asset', 'Price', 'Gap %', 'Change %', 'RVOL']].round(2)
@@ -479,7 +474,6 @@ with tab_overview:
                  hide_index=True, use_container_width=True)
 
 with tab_sectors:
-    # (same)
     col_a, col_b = st.columns(2)
     with col_a:
         st.subheader("Major ETFs")
@@ -535,7 +529,6 @@ with tab_rel_strength:
                      hide_index=True, use_container_width=True)
     except Exception as e: 
         st.error(f"RS Error: {e}")
-        st.info("Data may still be loading — refresh in 5 seconds.")
 
     st.subheader("⚖️ Mag7 Strength vs QQQ")
     st.caption("5-Day Cumulative Performance normalized to 0%")
@@ -562,11 +555,10 @@ with tab_rel_strength:
                      hide_index=True, use_container_width=True)
     except Exception as e: 
         st.error(f"Mag7 RS Error: {e}")
-        st.info("Data may still be loading — refresh in 5 seconds.")
 
 with tab_gex:
     st.subheader("📊 Gamma Exposure (GEX) + Gamma Flip Level")
-    st.caption("Front 3 expirations • Green = Long Gamma (stabilizing) • Red = Short Gamma (amplifying) • Yellow line = **Gamma Flip**")
+    st.caption("Front 3 expirations • Green = Long Gamma • Red = Short Gamma • Yellow line = **Gamma Flip**")
     
     user_ticker = st.text_input("Enter Ticker for GEX Analysis", value="SPY").upper().strip()
     
@@ -634,9 +626,6 @@ with tab_gex:
                 with col3:
                     st.metric("Current Spot", f"${spot:,.2f}")
                 
-                st.caption("**Gamma Flip** = first strike where net GEX changes sign. "
-                          "Above flip = dealers long gamma (dampens moves). Below = short gamma (amplifies moves).")
-                
                 fig = go.Figure()
                 fig.add_trace(go.Bar(
                     x=df_agg.index,
@@ -659,10 +648,8 @@ with tab_gex:
                     hovermode="x unified"
                 )
                 st.plotly_chart(fig, use_container_width=True)
-                
         except Exception as e:
             st.error(f"GEX Error: {e}")
-            st.info("Try SPY, QQQ, NVDA, TSLA — most liquid names work best.")
 
 with tab_options:
     st.subheader("🐳 Put/Call Volume Ratio")
@@ -683,22 +670,14 @@ with tab_earnings:
 
 with tab_analyst:
     st.subheader("📊 Analyst Ratings & Price Targets (Yahoo Finance)")
-    st.caption("Live consensus, targets & analyst count • Updated every 30 min • No scraping")
-    
     analyst_df = get_analyst_ratings()
-    
     if not analyst_df.empty:
         analyst_df = analyst_df.dropna(subset=['Bull Score']).sort_values('Bull Score', ascending=False)
-        
         def rating_color(val):
-            if "Strong Buy" in val or "Buy" in val: 
-                return 'background-color: #00cc66; color: black; font-weight: bold;'
-            if "Hold" in val: 
-                return 'background-color: #ffcc66; color: black;'
-            if "Sell" in val: 
-                return 'background-color: #ff6666; color: white; font-weight: bold;'
+            if "Strong Buy" in val or "Buy" in val: return 'background-color: #00cc66; color: black; font-weight: bold;'
+            if "Hold" in val: return 'background-color: #ffcc66; color: black;'
+            if "Sell" in val: return 'background-color: #ff6666; color: white; font-weight: bold;'
             return ''
-        
         st.dataframe(
             analyst_df[[
                 "Asset", "Symbol", "Consensus", "Bull Score", "Target Mean", 
@@ -717,54 +696,36 @@ with tab_analyst:
             hide_index=True,
             use_container_width=True
         )
-        
-        st.caption("**Target Range** shown as High / Low. **Bull Score** 5 = Strong Buy → 1 = Strong Sell")
-    else:
-        st.info("Fetching latest analyst consensus from Yahoo Finance...")
 
 with tab_macro:
     st.subheader("🌍 Macro & Market-Moving News")
-    st.caption("High-impact news affecting the broader market • Fed, Trump, geopolitics, economic data")
-    
     macro_news = get_macro_news()
-    
     if macro_news:
         total_score = 0
         trump_news = [item for item in macro_news if any(k in item.get('Title','').lower() for k in ['trump', 'president', 'white house', 'tariff', 'election', 'fed', 'inflation'])]
-        
         col1, col2 = st.columns(2)
-        
         with col1:
             st.markdown("### 📈 All Macro Headlines")
             for item in macro_news[:15]:
                 label, score = get_sentiment_score(item.get('Title', ''))
                 total_score += score
-                with st.expander(f"{label} | {item.get('Title')[:85]}{'...' if len(item.get('Title','')) > 85 else ''}"):
+                with st.expander(f"{label} | {item.get('Title')[:85]}..."):
                     st.write(f"**Source:** {item.get('Source')} | {item.get('Date')}")
                     st.write(f"[🔗 Read]({item.get('URL')})")
-        
         with col2:
             st.markdown("### 🇺🇸 Trump / Political Impact")
             if trump_news:
                 for item in trump_news[:10]:
                     label, score = get_sentiment_score(item.get('Title', ''))
-                    with st.expander(f"{label} | {item.get('Title')[:80]}{'...' if len(item.get('Title','')) > 80 else ''}"):
+                    with st.expander(f"{label} | {item.get('Title')[:80]}..."):
                         st.write(f"**Source:** {item.get('Source')} | {item.get('Date')}")
                         st.write(f"[🔗 Read]({item.get('URL')})")
             else:
                 st.info("No major Trump-related headlines right now")
-        
-        st.sidebar.metric("Macro Sentiment Pulse", total_score,
-                         delta="Bullish" if total_score >= 0 else "Bearish")
-    else:
-        st.info("Fetching macro news from Finviz...")
-
-with tab_extremes:
-    st.info("ATH/ATL scanner – coming soon")
+        st.sidebar.metric("Macro Sentiment Pulse", total_score, delta="Bullish" if total_score >= 0 else "Bearish")
 
 with tab_finnhub:
     st.subheader("🌐 Finnhub Daily Pulse")
-    st.caption("Live general market news + Today's Economic Calendar • Pre-market sentiment driver")
     col1, col2 = st.columns([1, 1])
     with col1:
         st.markdown("### 📈 Finnhub Market News (High Impact)")
@@ -775,63 +736,34 @@ with tab_finnhub:
                 with st.expander(f"{emoji} {row['Sentiment']} | {row['Time']} | {row['Title'][:85]}..."):
                     st.write(f"**Source:** {row['Source']}")
                     if row['URL']:
-                        st.write(f"[🔗 Read full story]({row['URL']})")
-        else:
-            st.info("Fetching high-impact news...")
+                        st.write(f"[🔗 Read]({row['URL']})")
     with col2:
         st.markdown("### 📅 Economic Calendar (Today)")
         econ_df = get_finnhub_econ_calendar()
         if not econ_df.empty:
-            st.dataframe(
-                econ_df.style.background_gradient(cmap='RdYlGn_r', subset=['Impact']),
-                hide_index=True, use_container_width=True
-            )
-            st.caption("🔴 HIGH = major movers (CPI, FOMC, NFP, GDP, Unemployment, Rate Decision...)")
-        else:
-            st.info("No events today or fetching data...")
+            st.dataframe(econ_df.style.background_gradient(cmap='RdYlGn_r', subset=['Impact']), hide_index=True, use_container_width=True)
 
-# ────────────────────────────────────────────────
-#  HIGH-IMPACT NEWS TAB
-# ────────────────────────────────────────────────
 with tab_news:
     st.subheader("🔥 Hot Mag7 + SPY/QQQ News")
-    st.caption("**Market-moving** news for the most important assets (AAPL, MSFT, NVDA, AMZN, GOOGL, META, TSLA, SPY, QQQ) • High-impact filter • Updated live")
-
     hot_df = get_mag7_hot_news()
-    
     if not hot_df.empty:
         for _, row in hot_df.iterrows():
             impact_emoji = "🔥" if row['Impact'] >= 5 else "⚡" if row['Impact'] >= 3 else "📈"
-            with st.expander(f"{impact_emoji} {row['Sentiment']} | {row['Asset']} | {row['Title'][:92]}{'...' if len(row['Title']) > 92 else ''} • {row['Time']}"):
+            with st.expander(f"{impact_emoji} {row['Sentiment']} | {row['Asset']} | {row['Title'][:92]}... • {row['Time']}"):
                 st.write(f"**Source:** {row['Source']} | Impact Score: {row['Impact']}")
-                st.write(f"[🔗 Read full story]({row['URL']})")
-    else:
-        st.info("Fetching hot Mag7 + SPY/QQQ news from Finviz...")
-
+                st.write(f"[🔗 Read]({row['URL']})")
     st.markdown("---")
-
     st.subheader("📰 High-Impact Theme Stocks News")
-    st.caption("Filtered for **market-moving** events across all trading themes • Earnings, Analyst Actions, M&A, Lawsuits, Major Moves")
-
     news_df = get_theme_stock_news()
-    
     if not news_df.empty:
-        total_score = news_df['Score'].sum()
-        st.sidebar.metric("Theme Sentiment Pulse", total_score,
-                         delta="Positive" if total_score >= 0 else "Negative")
-        
         for _, row in news_df.iterrows():
             impact_emoji = "🔥" if row['Impact'] >= 5 else "⚡" if row['Impact'] >= 3 else "📈"
-            with st.expander(f"{impact_emoji} {row['Sentiment']} | {row['Asset']} | {row['Title'][:92]}{'...' if len(row['Title']) > 92 else ''} • {row['Time']}"):
+            with st.expander(f"{impact_emoji} {row['Sentiment']} | {row['Asset']} | {row['Title'][:92]}... • {row['Time']}"):
                 st.write(f"**Source:** {row['Source']} | Impact Score: {row['Impact']}")
-                st.write(f"[🔗 Read full story]({row['URL']})")
-    else:
-        st.info("Fetching high-impact theme news from Finviz...")
+                st.write(f"[🔗 Read]({row['URL']})")
 
 with tab_bias:
     st.subheader("🔍 Market Bias & Gap Analysis")
-    st.caption("Bullish / Bearish / Chop regime based on **today's price vs yesterday close** • Gap % = (open - yesterday close)")
-
     key_assets = ["VIX", "ES (S&P 500 Fut)", "NQ (Nasdaq Fut)", "YM (Dow Fut)", 
                   "RTY (Russell 2000)", "SPY", "QQQ", "S&P 500"]
     bias_df = market_df[market_df['Asset'].isin(key_assets + list(MAG7_TICKERS.keys()))].copy()
@@ -863,7 +795,5 @@ with tab_bias:
         hide_index=True,
         use_container_width=True
     )
-    
-    st.info("**Regime Logic**: >1.8% = Strong Bull | 0.6–1.8% = Bull | ±0.6% = Chop | -1.8 to -0.6 = Bear | <-1.8% = Strong Bear")
 
-st_autorefresh(interval=45000, key="global_refresh")   # 45-second live refresh
+st_autorefresh(interval=60000, key="global_refresh")
