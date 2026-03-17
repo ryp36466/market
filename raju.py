@@ -217,7 +217,23 @@ def get_macro_drivers():
                 })
     except: pass
     return pd.DataFrame(drivers)
-
+@st.cache_data(ttl=300)
+def get_fmp_analyst_ratings(symbol):
+    """Fetches historical analyst grades from FMP using the stable endpoint."""
+    # It is safer to use st.secrets["FMP_API_KEY"], but using your provided key here:
+    api_key = "thDjYnltvzKxDlpUgS00v4j9gfa8jHGj"
+    url = f"https://financialmodelingprep.com/stable/historical-grades/{symbol}?limit=100&apikey={api_key}"
+    
+    try:
+        response = requests.get(url, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            if data:
+                return pd.DataFrame(data)
+        return pd.DataFrame()
+    except Exception as e:
+        st.error(f"FMP API Error: {e}")
+        return pd.DataFrame()
 # --- OPTIMIZED BULK FETCH FUNCTION ---
 @st.cache_data(ttl=15)
 def fetch_market_snapshot():
@@ -463,7 +479,7 @@ with col_refresh[1]:
 # ────────────────────────────────────────────────
 tab_premarket, tab_overview, tab_sectors, tab_themes, tab_rel_strength, tab_macro, tab_finnhub, tab_news, tab_bias = st.tabs([
     "🌅 Premarket Pulse", "📈 Market Overview", "🔥 Alpha Sectors", "🎯 Trading Themes",
-    "⚖️ Relative Strength", "🌍 Macro News", "🌐 Finnhub Daily Pulse",
+    "⚖️ Relative Strength", "🌍 Macro News", "🌐 Finnhub Daily Pulse","📊 Analyst Ratings",
     "📰 High-Impact News", "🔍 Bias & Regime"
 ])
 
@@ -811,7 +827,54 @@ with tab_bias:
         .format({"Gap %": "{:+.2f}%", "Change %": "{:+.2f}%", "RVOL": "{:.2f}x"}),
         hide_index=True, use_container_width=True
     )
+# --- NEW ANALYST RATINGS TAB ---
+with tab_analyst:
+    st.header("🏢 Institutional Intelligence (FMP)")
+    st.caption("Tracking Upgrades, Downgrades, and Reiterations from top-tier analysts.")
+    
+    # Use the existing ANALYST_SYMBOLS list from your code
+    selected_stock = st.selectbox("Select Ticker to Analyze", ANALYST_SYMBOLS, index=0)
+    
+    if selected_stock:
+        with st.spinner(f"Pulling institutional data for {selected_stock}..."):
+            df_ratings = get_fmp_analyst_ratings(selected_stock)
+        
+        if not df_ratings.empty:
+            # 1. Summary Metrics
+            upgrades = len(df_ratings[df_ratings['action'] == 'Upgrade'])
+            downgrades = len(df_ratings[df_ratings['action'] == 'Downgrade'])
+            
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Recent Upgrades", upgrades, delta=upgrades, delta_color="normal")
+            m2.metric("Recent Downgrades", downgrades, delta=-downgrades, delta_color="inverse")
+            m3.metric("Total Reports", len(df_ratings))
 
+            # 2. Sentiment Chart
+            fig_sent = px.histogram(
+                df_ratings, x="action", color="action",
+                color_discrete_map={"Upgrade": "#00ff88", "Downgrade": "#ff4444", "Maintained": "#3366ff", "Initial": "#888888"},
+                title=f"Analyst Action Distribution: {selected_stock}"
+            )
+            st.plotly_chart(fig_sent, use_container_width=True)
+
+            # 3. Detailed Data Table
+            st.subheader("📋 Recent Rating History")
+            
+            # Formatting the dataframe
+            display_df = df_ratings[['date', 'gradingCompany', 'fromGrade', 'toGrade', 'action']].copy()
+            
+            def style_action_col(val):
+                if val == 'Upgrade': return 'color: #00ff88; font-weight: bold'
+                if val == 'Downgrade': return 'color: #ff4444; font-weight: bold'
+                return ''
+
+            st.dataframe(
+                display_df.style.applymap(style_action_col, subset=['action']),
+                use_container_width=True,
+                hide_index=True
+            )
+        else:
+            st.warning(f"No analyst data found for {selected_stock}. Ensure your FMP API Key is active.")
 # ────────────────────────────────────────────────
 #  AUTO-REFRESH
 # ────────────────────────────────────────────────
