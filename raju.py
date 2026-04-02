@@ -350,7 +350,7 @@ def get_analyst_ratings():
     for sym in ANALYST_SYMBOLS:
         try:
             tk = yf.Ticker(sym)
-            info = tk.info                                      # ← fixed: was tk.get_info()
+            info = tk.info
             raw_key = info.get("recommendationKey", None)
             display_name, bull_score = rating_map.get(raw_key, ("—", 0))
             target_mean = info.get("targetMeanPrice")
@@ -448,7 +448,7 @@ with col_refresh[1]:
         st.cache_data.clear()
         st.rerun()
 
-# TABS (no tab_extremes)
+# TABS
 tab_overview, tab_sectors, tab_themes, tab_rel_strength, tab_gex, tab_options, tab_earnings, tab_analyst, tab_macro, tab_finnhub, tab_news, tab_bias = st.tabs([
     "📈 Market Overview", "🔥 Alpha Sectors", "🎯 Trading Themes", "⚖️ Relative Strength",
     "📊 GEX + Gamma Flip", "🐳 Options", "🎯 Earnings", "📊 Analyst Ratings (Yahoo)",
@@ -670,7 +670,11 @@ with tab_earnings:
             if val == "✅ Beat": return 'background-color: #00cc66; color: black; font-weight: bold;'
             if val == "❌ Miss": return 'background-color: #ff4d4d; color: white; font-weight: bold;'
             return ''
-        st.dataframe(df.style.applymap(highlight_beats, subset=['EPS Beat', 'Rev Beat']), hide_index=True, use_container_width=True)
+        st.dataframe(
+            df.style.map(highlight_beats, subset=['EPS Beat', 'Rev Beat']), 
+            hide_index=True, 
+            use_container_width=True
+        )
 
 with tab_analyst:
     st.subheader("📊 Analyst Ratings & Price Targets (Yahoo Finance)")
@@ -696,7 +700,7 @@ with tab_analyst:
                 "Target High", "Target Low", "Current Price", "Upside %", "Analyst Count"
             ]]
             .style
-            .applymap(rating_color, subset=['Consensus'])
+            .map(rating_color, subset=['Consensus'])
             .background_gradient(cmap='RdYlGn', subset=['Upside %', 'Bull Score'])
             .format({
                 "Target Mean": "${:,.2f}",
@@ -845,7 +849,7 @@ with tab_bias:
     st.dataframe(
         bias_df[['Asset', 'Price', 'Gap %', 'Change %', 'Bias', 'RVOL']].round(2)
         .style
-        .applymap(style_bias, subset=['Bias'])
+        .map(style_bias, subset=['Bias'])
         .background_gradient(cmap='RdYlGn', subset=['Change %', 'Gap %'])
         .format({"Gap %": "{:+.2f}%", "Change %": "{:+.2f}%", "RVOL": "{:.2f}x"}),
         hide_index=True,
