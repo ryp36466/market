@@ -1,81 +1,69 @@
 import streamlit as st
-import re
-import yfinance as yf
 import pandas as pd
+import requests
+from bs4 import BeautifulSoup
 
-# --- Configuration ---
-st.set_page_config(page_title="Market Conviction Dashboard", layout="wide")
+SOURCES = {
+    "All": "https://finviz.com/news.ashx",
+    "Market": "https://finviz.com/news.ashx?v=3",
+    "Stocks": "https://finviz.com/news.ashx?v=4",
+    "Crypto": "https://finviz.com/news.ashx?v=5",
+    "ETFs": "https://finviz.com/news.ashx?v=6"
+}
 
-def extract_tickers(headline):
-    # Regex to catch tickers like AAPL or $TSLA
-    ticker_pattern = r'\$?\b[A-Z]{2,5}\b'
-    found = re.findall(ticker_pattern, headline)
-    
-    # Filter out common non-ticker words
-    blacklist = {'CEO', 'FDA', 'USA', 'IPO', 'ETF', 'SEC', 'GAAP', 'EST', 'NEWS', 'A', 'I'}
-    
-    tickers = {t.replace('$', '') for t in found if t.replace('$', '') not in blacklist}
-    return list(tickers)
+def fetch_combined_news():
+    combined_data = []
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    for name, url in SOURCES.items():
+        try:
+            res = requests.get(url, headers=headers, timeout=10)
+            soup = BeautifulSoup(res.content, 'html.parser')
+            rows = soup.find_all('tr', class_='nn')
+            for row in rows:
+                cols = row.find_all('td')
+                if len(cols) >= 2:
+                    headline = cols[1].text.strip()
+                    link = cols[1].find('a')['href'] if cols[1].find('a') else ""
+                    combined_data.append({"Source": name, "Headline": headline, "Link": link})
+        except:
+            continue
+    return pd.DataFrame(combined_data).drop_duplicates(subset=['Headline'])
 
-def get_conviction_score(ticker):
-    try:
-        stock = yf.Ticker(ticker)
-        # Get 2 days of history for price/volume comparison
-        df = stock.history(period="2d")
-        
-        if df.empty or len(df) < 2:
-            return None
+def categorize_news(headline):
+    # Category 1: Hard Catalysts (Huge News)
+    catalysts = ['earnings', 'fda', 'merger', 'acquisition', 'buyback', 'offering', 'contract']
+    # Category 2: Relative Strength/Momentum
+    strength = ['outperforming', 'leads', 'surges', 'rally', 'all-time high', 'outpaces', 'defies']
+    # Category 3: Relative Weakness
+    weakness = ['underperforming', 'lags', 'slumps', 'tumbles', 'all-time low', 'drifts', 'plunges']
 
-        prev_close = df['Close'].iloc[-2]
-        curr_price = df['Close'].iloc[-1]
-        curr_vol = df['Volume'].iloc[-1]
-        
-        # Get 10-day avg volume from info
-        avg_vol = stock.info.get('averageDailyVolume10Day', 1)
-        
-        vol_ratio = curr_vol / avg_vol
-        pct_change = ((curr_price - prev_close) / prev_close) * 100
-        
-        # Logic for High Conviction
-        is_high = vol_ratio > 1.5 and abs(pct_change) > 3
-        
-        return {
-            "Ticker": ticker,
-            "Price": f"${round(curr_price, 2)}",
-            "Vol_Ratio": round(vol_ratio, 2),
-            "Pct_Change": f"{round(pct_change, 2)}%",
-            "Conviction": "🔥 HIGH" if is_high else "⚖️ MODERATE"
-        }
-    except Exception as e:
-        return None
+    h = headline.lower()
+    if any(word in h for word in catalysts):
+        return "🔥 Catalyst"
+    elif any(word in h for word in strength):
+        return "📈 Relative Strength"
+    elif any(word in h for word in weakness):
+        return "📉 Relative Weakness"
+    return None
 
 # --- Streamlit UI ---
-st.title("📈 Stock Conviction Analyzer")
-st.markdown("Extracts tickers from headlines and checks for unusual volume and price action.")
+st.set_page_config(layout="wide")
+st.title("⚡ Real-Time Alpha Feed")
 
-# User Input
-headline_input = st.text_input("Paste News Headline here:", "NVDA surges after earnings while TSLA dips")
+if st.button('Scan for Market Movers'):
+    df = fetch_combined_news()
+    # Apply the categorization
+    df['Impact'] = df['Headline'].apply(categorize_news)
+    # Filter out the "None" (fluff news)
+    movers = df[df['Impact'].notna()]
 
-if headline_input:
-    tickers = extract_tickers(headline_input)
-    
-    if not tickers:
-        st.info("No tickers detected in that headline.")
+    if not movers.empty:
+        for _, row in movers.iterrows():
+            # Use columns for a clean dashboard look
+            col1, col2, col3 = st.columns([1.5, 1, 6])
+            col1.write(f"**{row['Impact']}**")
+            col2.caption(f"[{row['Source']}]")
+            col3.markdown(f"[{row['Headline']}]({row['Link']})")
+            st.divider()
     else:
-        results = []
-        with st.spinner(f'Analyzing {", ".join(tickers)}...'):
-            for t in tickers:
-                score = get_conviction_score(t)
-                if score:
-                    results.append(score)
-        
-        if results:
-            # Display results in a nice table
-            df_display = pd.DataFrame(results)
-            st.table(df_display) 
-        else:
-            st.error("Could not fetch market data for the detected tickers.")
-
-# Sidebar Info
-st.sidebar.header("Logic Settings")
-st.sidebar.write("✅ **High Conviction** = Volume > 1.5x Avg AND Price Move > 3%")
+        st.info("No relative strength or catalyst news found in the current cycle.")
