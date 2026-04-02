@@ -13,31 +13,43 @@ SOURCES = {
 
 def fetch_combined_news():
     combined_data = []
-    headers = {'User-Agent': 'Mozilla/5.0'}
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+    
     for name, url in SOURCES.items():
         try:
             res = requests.get(url, headers=headers, timeout=10)
+            if res.status_code != 200:
+                continue
+                
             soup = BeautifulSoup(res.content, 'html.parser')
+            # Finviz news rows usually have class 'nn'
             rows = soup.find_all('tr', class_='nn')
+            
             for row in rows:
                 cols = row.find_all('td')
                 if len(cols) >= 2:
-                    headline = cols[1].text.strip()
-                    link = cols[1].find('a')['href'] if cols[1].find('a') else ""
-                    combined_data.append({"Source": name, "Headline": headline, "Link": link})
-        except:
+                    headline_cell = cols[1]
+                    link_tag = headline_cell.find('a')
+                    if link_tag:
+                        headline = link_tag.text.strip()
+                        link = link_tag['href']
+                        combined_data.append({"Source": name, "Headline": headline, "Link": link})
+        except Exception as e:
+            st.error(f"Error fetching from {name}: {e}")
             continue
+            
+    if not combined_data:
+        # Return an empty dataframe with the expected columns to avoid KeyErrors
+        return pd.DataFrame(columns=["Source", "Headline", "Link"])
+        
     return pd.DataFrame(combined_data).drop_duplicates(subset=['Headline'])
 
 def categorize_news(headline):
-    # Category 1: Hard Catalysts (Huge News)
     catalysts = ['earnings', 'fda', 'merger', 'acquisition', 'buyback', 'offering', 'contract']
-    # Category 2: Relative Strength/Momentum
     strength = ['outperforming', 'leads', 'surges', 'rally', 'all-time high', 'outpaces', 'defies']
-    # Category 3: Relative Weakness
     weakness = ['underperforming', 'lags', 'slumps', 'tumbles', 'all-time low', 'drifts', 'plunges']
-
-    h = headline.lower()
+    
+    h = str(headline).lower()
     if any(word in h for word in catalysts):
         return "🔥 Catalyst"
     elif any(word in h for word in strength):
@@ -47,23 +59,28 @@ def categorize_news(headline):
     return None
 
 # --- Streamlit UI ---
-st.set_page_config(layout="wide")
+st.set_page_config(layout="wide", page_title="Alpha Feed")
 st.title("⚡ Real-Time Alpha Feed")
 
 if st.button('Scan for Market Movers'):
-    df = fetch_combined_news()
-    # Apply the categorization
-    df['Impact'] = df['Headline'].apply(categorize_news)
-    # Filter out the "None" (fluff news)
-    movers = df[df['Impact'].notna()]
-
-    if not movers.empty:
-        for _, row in movers.iterrows():
-            # Use columns for a clean dashboard look
-            col1, col2, col3 = st.columns([1.5, 1, 6])
-            col1.write(f"**{row['Impact']}**")
-            col2.caption(f"[{row['Source']}]")
-            col3.markdown(f"[{row['Headline']}]({row['Link']})")
-            st.divider()
-    else:
-        st.info("No relative strength or catalyst news found in the current cycle.")
+    with st.spinner("Scraping Finviz..."):
+        df = fetch_combined_news()
+        
+        # FIX: Check if the column exists before applying
+        if "Headline" in df.columns and not df.empty:
+            df['Impact'] = df['Headline'].apply(categorize_news)
+            
+            # Filter for rows that actually have an impact label
+            movers = df[df['Impact'].notna()]
+            
+            if not movers.empty:
+                for _, row in movers.iterrows():
+                    col1, col2, col3 = st.columns([1.5, 1, 6])
+                    col1.write(f"**{row['Impact']}**")
+                    col2.caption(f"[{row['Source']}]")
+                    col3.markdown(f"[{row['Headline']}]({row['Link']})")
+                    st.divider()
+            else:
+                st.info("No movers found in the current news cycle.")
+        else:
+            st.warning("No news data could be retrieved. Check your internet connection or if Finviz is blocking the request.")
