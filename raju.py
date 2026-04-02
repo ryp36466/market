@@ -170,9 +170,6 @@ def fetch_market_snapshot():
             continue
     return pd.DataFrame(rows), intra, hist_data
 
-# Earnings, PCR, Gamma, News, Analyst functions (kept exactly as before)
-# ... (I kept them short here for space — they are the same as in the previous full code)
-
 def get_earnings_calendar_finnhub(date_str):
     url = f"https://finnhub.io/api/v1/calendar/earnings?from={date_str}&to={date_str}&token={FINNHUB_API_KEY}"
     try:
@@ -252,8 +249,6 @@ def calc_gamma_vectorized(S, K, T, v, r, q, types, OI):
 
 @st.cache_data(ttl=180)
 def get_theme_stock_news(max_stocks=30):
-    # ... (same as before - omitted for brevity, copy from previous full code if needed)
-    # (It is unchanged)
     news_items = []
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     for sym in ANALYST_SYMBOLS[:max_stocks]:
@@ -291,7 +286,6 @@ def get_theme_stock_news(max_stocks=30):
 
 @st.cache_data(ttl=180)
 def get_mag7_hot_news():
-    # ... (same as before)
     news_items = []
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     for sym in MAG7_HOT_SYMBOLS:
@@ -351,13 +345,12 @@ def get_macro_news():
 
 @st.cache_data(ttl=1800)
 def get_analyst_ratings():
-    # ... (same as before)
     ratings = []
     rating_map = {"strong_buy": ("🚀 Strong Buy", 5), "buy": ("🟢 Buy", 4), "hold": ("⚖️ Hold", 3), "sell": ("🔴 Sell", 2), "strong_sell": ("💥 Strong Sell", 1)}
     for sym in ANALYST_SYMBOLS:
         try:
             tk = yf.Ticker(sym)
-            info = tk.get_info()
+            info = tk.info                                      # ← fixed: was tk.get_info()
             raw_key = info.get("recommendationKey", None)
             display_name, bull_score = rating_map.get(raw_key, ("—", 0))
             target_mean = info.get("targetMeanPrice")
@@ -455,16 +448,15 @@ with col_refresh[1]:
         st.cache_data.clear()
         st.rerun()
 
-# TABS WITH NEW FINNHUB PULSE TAB
+# TABS (no tab_extremes)
 tab_overview, tab_sectors, tab_themes, tab_rel_strength, tab_gex, tab_options, tab_earnings, tab_analyst, tab_macro, tab_finnhub, tab_news, tab_bias = st.tabs([
     "📈 Market Overview", "🔥 Alpha Sectors", "🎯 Trading Themes", "⚖️ Relative Strength",
     "📊 GEX + Gamma Flip", "🐳 Options", "🎯 Earnings", "📊 Analyst Ratings (Yahoo)",
     "🌍 Macro News", "🌐 Finnhub Daily Pulse", "📰 High-Impact News", "🔍 Bias & Regime"
 ])
 
-# All tabs (full code)
+# All tabs
 with tab_overview:
-    # (same as before)
     st.subheader("🗝️ Key Indices & Futures")
     key_assets = ["VIX", "ES (S&P 500 Fut)", "NQ (Nasdaq Fut)", "YM (Dow Fut)", "RTY (Russell 2000)", "SPY", "QQQ", "S&P 500"]
     key_df = market_df[market_df['Asset'].isin(key_assets)][['Asset', 'Price', 'Gap %', 'Change %', 'RVOL']].round(2)
@@ -479,7 +471,6 @@ with tab_overview:
                  hide_index=True, use_container_width=True)
 
 with tab_sectors:
-    # (same)
     col_a, col_b = st.columns(2)
     with col_a:
         st.subheader("Major ETFs")
@@ -758,9 +749,6 @@ with tab_macro:
                          delta="Bullish" if total_score >= 0 else "Bearish")
     else:
         st.info("Fetching macro news from Finviz...")
-
-with tab_extremes:
-    st.info("ATH/ATL scanner – coming soon")
 
 with tab_finnhub:
     st.subheader("🌐 Finnhub Daily Pulse")
