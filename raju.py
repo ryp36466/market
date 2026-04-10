@@ -1,65 +1,247 @@
+# ============================================================
+# ALPHA TERMINAL PRO — STREAMLIT DASHBOARD
+# ============================================================
+
+# ────────────────────────────────────────────────
+# IMPORTS
+# ────────────────────────────────────────────────
+import streamlit as st
+import yfinance as yf
 import pandas as pd
 import numpy as np
-import yfinance as yf
-import streamlit as st
+import datetime
+import pytz
+import requests
 
-def compute_atr(df, period=14):
-    high = df['High']
-    low = df['Low']
-    close = df['Close']
-    prev_close = close.shift(1)
-    tr = pd.concat([
-        (high - low),
-        (high - prev_close).abs(),
-        (low - prev_close).abs()
-    ], axis=1).max(axis=1)
-    return tr.rolling(period).mean()
+from streamlit_autorefresh import st_autorefresh
+from bs4 import BeautifulSoup
+from finvizfinance.news import News
+from scipy.stats import norm
 
-@st.cache_data(ttl=120)
-def build_dynamic_trade_universe(symbols, min_price=5, min_dollar_vol=20_000_000, min_rvol=1.5, min_atr_abs=4.0, min_atr_pct=5.0):
+import plotly.express as px
+import plotly.graph_objects as go
+
+
+# ============================================================
+# PAGE CONFIGURATION
+# ============================================================
+st.set_page_config(
+    page_title="Alpha Terminal Pro",
+    page_icon="🏛️",
+    layout="wide"
+)
+
+
+# ============================================================
+# USER WATCHLIST
+# ============================================================
+USER_HOT_LIST = [
+    "NET", "RDDT", "CRCL", "CRWD", "CRM", "BMNR", "UNH", "SOFI", "APP", "ORCL",
+    "RBRK", "MRVL", "ARM", "COIN", "SMCI", "IBM", "AAL", "BA", "SHOP", "LMND",
+    "RIVN", "DUOL", "MDB", "HOOD", "TNA", "ADBE", "PLTR", "NOW", "PANW", "GS",
+    "SNDK", "OXY", "ALB", "KO", "LLY", "BABA", "GOOGL", "CRWV", "LULU", "ALAB",
+    "AVGO", "IREN", "MU", "BIDU", "OKLO", "DELL", "TSM", "RKLB", "MP", "COST",
+    "CYNA", "QBTS", "QUBT", "RGTI", "QCOM", "BE", "RBLX", "CIFR", "IBIT", "ASTS",
+    "CAT", "FDX", "XOM", "WDC", "SLV", "ZSL", "TQQQ", "STX"
+]
+
+
+# ============================================================
+# MARKET CONFIGURATION
+# ============================================================
+GLOBAL_TICKERS = {
+    "VIX": "^VIX",
+    "ES (S&P 500 Fut)": "ES=F",
+    "NQ (Nasdaq Fut)": "NQ=F",
+    "YM (Dow Fut)": "YM=F",
+    "RTY (Russell 2000)": "RTY=F",
+    "SPY": "SPY",
+    "QQQ": "QQQ",
+    "10Y Yield": "^TNX",
+    "DXY": "DX-Y.NYB",
+    "S&P 500": "^GSPC"
+}
+
+SECTOR_TICKERS = {
+    "Tech (XLK)": "XLK",
+    "Software (IGV)": "IGV",
+    "Semiconductor (SMH)": "SMH",
+    "Financials (XLF)": "XLF",
+    "Energy (XLE)": "XLE",
+    "Healthcare (XLV)": "XLV",
+    "Disc (XLY)": "XLY",
+    "Indus (XLI)": "XLI",
+    "Utils (XLU)": "XLU",
+    "RE": "XLRE",
+    "Staples (XLP)": "XLP",
+    "Materials (XLB)": "XLB"
+}
+
+MAG7_TICKERS = {
+    "Apple": "AAPL",
+    "MSFT": "MSFT",
+    "Nvidia": "NVDA",
+    "Amazon": "AMZN",
+    "Google": "GOOGL",
+    "Meta": "META",
+    "Tesla": "TSLA"
+}
+
+
+# ============================================================
+# TRADING THEMES
+# ============================================================
+TRADING_THEMES = {
+    "SEMICONDUCTORS": [
+        "SMH", "SOXL", "NVDA", "AMD", "AVGO", "QCOM",
+        "INTC", "MU", "MRVL", "TSM", "ARM", "SMCI"
+    ],
+    "SOFTWARE / SaaS": [
+        "IGV", "MSFT", "CRM", "NOW", "ADBE", "CRWD",
+        "MDB", "PLTR", "ORCL", "IBM"
+    ],
+    "MEGA CAP TECH": [
+        "QQQ", "META", "GOOGL", "AAPL",
+        "AMZN", "MSFT", "NVDA", "TSLA"
+    ],
+    "CRYPTO": [
+        "BTC-USD", "IBIT", "COIN", "CIFR"
+    ],
+    "USER HOT LIST": USER_HOT_LIST
+}
+
+
+# ============================================================
+# SYMBOL MAPPING
+# ============================================================
+symbol_to_label = {}
+
+for group in [GLOBAL_TICKERS, SECTOR_TICKERS, MAG7_TICKERS]:
+    for label, sym in group.items():
+        symbol_to_label.setdefault(sym, label)
+
+for symbols in TRADING_THEMES.values():
+    for sym in symbols:
+        symbol_to_label.setdefault(sym, sym)
+
+ALL_SYMBOLS = list(symbol_to_label.keys())
+
+
+# ============================================================
+# SENTIMENT + NEWS FILTERS
+# ============================================================
+HIGH_IMPACT_KEYWORDS = [
+    "earnings", "eps", "revenue", "guidance",
+    "upgrade", "downgrade", "price target",
+    "acquisition", "merger", "lawsuit",
+    "fed", "inflation", "surge", "plunge"
+]
+
+LOW_IMPACT_KEYWORDS = [
+    "interview", "opinion", "recap",
+    "blog", "podcast", "analysis"
+]
+
+
+def is_high_impact(title: str) -> bool:
+    t = title.lower()
+    if any(k in t for k in LOW_IMPACT_KEYWORDS):
+        return False
+    return any(k in t for k in HIGH_IMPACT_KEYWORDS)
+
+
+def get_sentiment_score(text: str):
+    bull_words = ["surge", "rally", "beat", "growth", "strong"]
+    bear_words = ["drop", "miss", "weak", "decline", "cut"]
+
+    score = sum(w in text.lower() for w in bull_words) \
+          - sum(w in text.lower() for w in bear_words)
+
+    if score > 0:
+        return "Bullish", score
+    elif score < 0:
+        return "Bearish", score
+    return "Neutral", 0
+
+
+# ============================================================
+# DATA FUNCTIONS
+# ============================================================
+@st.cache_data(ttl=20)
+def fetch_market_snapshot():
+    hist = yf.download(ALL_SYMBOLS, period="10d", interval="1d", progress=False)
+
     rows = []
 
-    for sym in symbols:
+    for sym in ALL_SYMBOLS:
         try:
-            hist = yf.download(sym, period="3mo", interval="1d", progress=False, auto_adjust=False)
-            if hist.empty or len(hist) < 30:
+            tk = yf.Ticker(sym)
+            info = tk.fast_info
+
+            price = info.get("lastPrice")
+            prev = info.get("previousClose")
+
+            if not price or not prev:
                 continue
 
-            close = float(hist['Close'].iloc[-1])
-            atr = float(compute_atr(hist, 14).iloc[-1])
-            atr_pct = (atr / close) * 100 if close > 0 else 0
-
-            avg_vol_20 = float(hist['Volume'].tail(20).mean())
-            dollar_vol = avg_vol_20 * close
-
-            intraday = yf.download(sym, period="1d", interval="5m", progress=False, prepost=True, auto_adjust=False)
-            today_vol = float(intraday['Volume'].sum()) if not intraday.empty else 0.0
-            rvol = today_vol / avg_vol_20 if avg_vol_20 > 0 else 0.0
-
-            if close < min_price:
-                continue
-            if dollar_vol < min_dollar_vol:
-                continue
-            if rvol < min_rvol:
-                continue
-            if not (atr >= min_atr_abs or atr_pct >= min_atr_pct):
-                continue
+            change = (price - prev) / prev * 100
 
             rows.append({
                 "Symbol": sym,
-                "Close": round(close, 2),
-                "ATR_14": round(atr, 2),
-                "ATR_%": round(atr_pct, 2),
-                "AvgVol20": int(avg_vol_20),
-                "DollarVol20": round(dollar_vol, 0),
-                "RVOL": round(rvol, 2),
+                "Price": round(price, 2),
+                "Change %": round(change, 2)
             })
 
         except Exception:
             continue
 
-    df = pd.DataFrame(rows)
-    if df.empty:
-        return df
+    return pd.DataFrame(rows), hist
 
-    return df.sort_values(["RVOL", "ATR_%", "DollarVol20"], ascending=False).reset_index(drop=True)
+
+# ============================================================
+# UI
+# ============================================================
+market_df, hist_data = fetch_market_snapshot()
+
+st.title("Alpha Terminal Pro")
+
+st.caption(
+    f"Last Updated: {datetime.datetime.now(pytz.timezone('US/Eastern')).strftime('%H:%M:%S')}"
+)
+
+
+# ============================================================
+# OVERVIEW TABLE
+# ============================================================
+st.subheader("Market Snapshot")
+
+st.dataframe(
+    market_df.style.background_gradient(
+        cmap="RdYlGn",
+        subset=["Change %"]
+    ),
+    use_container_width=True
+)
+
+
+# ============================================================
+# RELATIVE STRENGTH CHART
+# ============================================================
+st.subheader("Relative Strength (vs SPY)")
+
+try:
+    df = hist_data['Close'][["SPY"]].dropna()
+    norm_df = (df / df.iloc[0] - 1) * 100
+
+    fig = px.line(norm_df, title="SPY Performance (%)")
+
+    st.plotly_chart(fig, use_container_width=True)
+
+except Exception as e:
+    st.error(f"Error: {e}")
+
+
+# ============================================================
+# AUTO REFRESH
+# ============================================================
+st_autorefresh(interval=45000, key="refresh")
